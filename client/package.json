@@ -1,0 +1,19 @@
+{
+  "name": "geomaticx-web",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^4.7.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "react-icons": "^5.7.0",
+    "recharts": "^3.10.1",
+    "vite": "^7.0.6"
+  }
+}
