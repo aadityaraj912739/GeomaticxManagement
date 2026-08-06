@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { Op } from "sequelize";
-import { Attendance, AiInference, AssetRecord, AuditLog, Client, CommercialRecord, Employee, Office, ProcessingJob, Project, QcApproval, SecurityRegister, SpatialRecord, SurveyForm, SurveySubmission, Task, User } from "../models/registry.js";
+import { Attendance, AttendanceBreak, AiInference, AssetRecord, AuditLog, Client, CommercialRecord, Employee, MarketingOpportunity, Office, ProcessingJob, Project, QcApproval, SecurityRegister, SpatialRecord, SurveyForm, SurveySubmission, Task, User } from "../models/registry.js";
 import { allow } from "../middleware/auth.js";
 import { recordAudit } from "../services/audit.js";
 
@@ -12,11 +12,12 @@ async function employeeForUser(userId) {
 
 export const dashboardRouter = Router();
 dashboardRouter.get("/", async (_req, res) => {
-  const [employees, offices, clients, projects, tasks, attendance, surveyForms, submissions, spatialRecords, processingJobs, assets, commercialRecords, approvals, aiRecords, securityRegisters] = await Promise.all([
+  const [employees, offices, clients, projects, tasks, attendance, surveyForms, submissions, spatialRecords, processingJobs, assets, commercialRecords, approvals, aiRecords, securityRegisters, marketingOpportunities, activeBreakRows] = await Promise.all([
     Employee.count(), Office.count(), Client.count(), Project.count(), Task.count(), Attendance.count(), SurveyForm.count(), SurveySubmission.count(),
-    SpatialRecord.count(), ProcessingJob.count(), AssetRecord.count(), CommercialRecord.count(), QcApproval.count(), AiInference.count(), SecurityRegister.count()
+    SpatialRecord.count(), ProcessingJob.count(), AssetRecord.count(), CommercialRecord.count(), QcApproval.count(), AiInference.count(), SecurityRegister.count(), MarketingOpportunity.count(),
+    AttendanceBreak.findAll({ where: { resumedAt: null }, include: [{ model: Attendance, include: [{ model: Employee, attributes: ["id", "employeeCode", "firstName", "lastName"] }] }], order: [["startedAt", "DESC"]] })
   ]);
-  res.json({ employees, offices, clients, projects, tasks, attendance, surveyForms, submissions, spatialRecords, processingJobs, assets, commercialRecords, approvals, aiRecords, securityRegisters });
+  res.json({ employees, offices, clients, projects, tasks, attendance, surveyForms, submissions, spatialRecords, processingJobs, assets, commercialRecords, approvals, aiRecords, securityRegisters, marketingOpportunities, activeBreaks: activeBreakRows.length, onBreakEmployees: activeBreakRows.map(row => ({ id: row.id, breakType: row.breakType, startedAt: row.startedAt, employee: row.Attendance?.Employee || null })) });
 });
 
 export const reportingRouter = Router();
@@ -89,10 +90,10 @@ attendanceRouter.get("/", async (req, res, next) => {
       if (!employee) return res.json([]);
       where = { employeeId: employee.id };
     }
-    res.json(await Attendance.findAll({ where, include: [{ model: Employee }], order: [["workDate", "DESC"], ["checkIn", "DESC"]] }));
+    res.json(await Attendance.findAll({ where, include: [{ model: Employee }, { model: AttendanceBreak, as: "breaks", order: [["startedAt", "ASC"]] }], order: [["workDate", "DESC"], ["checkIn", "DESC"]] }));
   } catch (e) { next(e); }
 });
-attendanceRouter.post("/", allow("ADMIN", "MANAGER", "HR", "SURVEYOR", "EMPLOYEE"), async (req, res, next) => {
+attendanceRouter.post("/", allow("ADMIN", "MANAGER", "HR", "SURVEYOR", "EMPLOYEE", "MARKETING_EXECUTIVE", "MARKETING_MANAGER"), async (req, res, next) => {
   try {
     const ownEmployee = await employeeForUser(req.user.id);
     const requestedEmployeeId = supervisoryRoles.includes(req.user.role) ? req.body.employeeId : null;
@@ -101,12 +102,17 @@ attendanceRouter.post("/", allow("ADMIN", "MANAGER", "HR", "SURVEYOR", "EMPLOYEE
     const employee = requestedEmployeeId ? await Employee.findByPk(requestedEmployeeId) : ownEmployee;
     if (!employee) return res.status(400).json({ message: "Employee record not found" });
     const workDate = req.body.workDate || new Date().toISOString().slice(0, 10);
+    const latitude = Number(req.body.latitude), longitude = Number(req.body.longitude);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+      return res.status(400).json({ message: "A valid automatically detected location is required for check-in" });
+    }
     const defaults = {
       employeeId,
       workDate,
       checkIn: req.body.checkIn || new Date(),
-      latitude: req.body.latitude || null,
-      longitude: req.body.longitude || null,
+      latitude,
+      longitude,
+      locationAccuracy: Number.isFinite(Number(req.body.locationAccuracy)) ? Number(req.body.locationAccuracy) : null,
       notes: req.body.notes || null
     };
     const [row, created] = await Attendance.findOrCreate({
@@ -125,10 +131,42 @@ attendanceRouter.patch("/:id/checkout", async (req, res, next) => {
       const employee = await employeeForUser(req.user.id);
       if (!employee || row.employeeId !== employee.id) return res.status(403).json({ message: "You can only check out your own attendance" });
     }
+    if (row.checkOut) return res.status(409).json({ message: "Attendance is already checked out" });
+    if (!String(req.body.workDescription || "").trim()) return res.status(400).json({ message: "Please describe the work completed today before checking out" });
+    const activeBreak = await AttendanceBreak.findOne({ where: { attendanceId: row.id, resumedAt: null } });
+    if (activeBreak) return res.status(409).json({ message: "Resume work before checking out" });
     const before = row.toJSON();
-    await row.update({ checkOut: new Date() });
+    await row.update({ checkOut: new Date(), workDescription: String(req.body.workDescription).trim() });
     await recordAudit(req, "UPDATE", "Attendance", row.id, { before, after: row });
     res.json(row);
+  } catch (e) { next(e); }
+});
+attendanceRouter.post("/:id/breaks", async (req, res, next) => {
+  try {
+    const row = await Attendance.findByPk(req.params.id);
+    if (!row) return res.status(404).json({ message: "Attendance record not found" });
+    const employee = await employeeForUser(req.user.id);
+    if (!supervisoryRoles.includes(req.user.role) && (!employee || row.employeeId !== employee.id)) return res.status(403).json({ message: "You can only manage your own breaks" });
+    if (row.checkOut) return res.status(409).json({ message: "Workday is already completed" });
+    if (await AttendanceBreak.findOne({ where: { attendanceId: row.id, resumedAt: null } })) return res.status(409).json({ message: "A break is already active" });
+    const allowed = ["TEA", "LUNCH", "PERSONAL", "OTHER"];
+    const breakType = allowed.includes(req.body.breakType) ? req.body.breakType : "TEA";
+    const entry = await AttendanceBreak.create({ attendanceId: row.id, breakType, notes: req.body.notes || null, startedAt: new Date() });
+    await recordAudit(req, "CREATE", "AttendanceBreak", entry.id, { after: entry });
+    res.status(201).json(entry);
+  } catch (e) { next(e); }
+});
+attendanceRouter.patch("/:attendanceId/breaks/:breakId/resume", async (req, res, next) => {
+  try {
+    const row = await Attendance.findByPk(req.params.attendanceId);
+    const entry = await AttendanceBreak.findOne({ where: { id: req.params.breakId, attendanceId: req.params.attendanceId } });
+    if (!row || !entry) return res.status(404).json({ message: "Active break not found" });
+    const employee = await employeeForUser(req.user.id);
+    if (!supervisoryRoles.includes(req.user.role) && (!employee || row.employeeId !== employee.id)) return res.status(403).json({ message: "You can only manage your own breaks" });
+    if (entry.resumedAt) return res.status(409).json({ message: "Work has already resumed" });
+    await entry.update({ resumedAt: new Date() });
+    await recordAudit(req, "UPDATE", "AttendanceBreak", entry.id, { after: entry });
+    res.json(entry);
   } catch (e) { next(e); }
 });
 

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { AiInference, AiRecord, AssetRecord, Attendance, AuditLog, CommercialRecord, Designation, Employee, Notification, Office, ProcessingJob, Project, QcApproval, SecurityRegister, SpatialRecord, SurveyForm, SurveySubmission, Task, User, models } from "../src/models/registry.js";
+import { AiInference, AiRecord, AssetRecord, Attendance, AttendanceBreak, AuditLog, BidCostItem, CommercialRecord, Designation, Employee, MarketingActivity, MarketingOpportunity, Notification, Office, ProcessingJob, Project, QcApproval, SecurityRegister, SpatialRecord, SurveyForm, SurveySubmission, Task, User, models } from "../src/models/registry.js";
 
 test("organization foundation models are registered", () => {
   for (const name of ["Office", "Department", "Designation", "Employee", "Notification", "SpatialRecord", "ProcessingJob", "AssetRecord", "CommercialRecord", "QcApproval", "AiRecord", "AiInference", "SecurityRegister", "AuditLog"]) {
@@ -55,4 +55,13 @@ test("new operational records attach to projects", () => {
   assert.equal(AiInference.associations.requestedBy.target, User);
   assert.equal(AiInference.associations.reviewedBy.target, User);
   assert.equal(SecurityRegister.associations.Project.target, Project);
+});
+
+test("marketing workflow and attendance breaks have durable associations", () => {
+  assert.equal(models.MarketingOpportunity, MarketingOpportunity);
+  assert.equal(MarketingOpportunity.associations.assignedExecutive.target, User);
+  assert.equal(MarketingOpportunity.associations.costItems.target, BidCostItem);
+  assert.equal(MarketingOpportunity.associations.activities.target, MarketingActivity);
+  assert.equal(Attendance.associations.breaks.target, AttendanceBreak);
+  assert.equal(AttendanceBreak.associations.Attendance.foreignKey, "attendanceId");
 });

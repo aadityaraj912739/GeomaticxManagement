@@ -14,6 +14,7 @@ import SecurityControls from "./SecurityControls";
 import Attendance from "./Attendance";
 import SurveySubmissions from "./SurveySubmissions";
 import Tasks from "./Tasks";
+import Marketing from "./Marketing";
 
 export const managementRoles = ["ADMIN", "MANAGER"];
 export const hrRoles = ["ADMIN", "HR"];
@@ -23,6 +24,7 @@ export function makePages(user, focusedTask = null) {
   return {
     Dashboard: { element: <Dashboard/> },
     Attendance: { element: <Attendance currentUser={user}/> },
+    Marketing: { roles: ["ADMIN", "MANAGER", "MARKETING_MANAGER", "MARKETING_EXECUTIVE"], element: <Marketing currentUser={user}/> },
     "Submit Survey": { element: <SurveySubmissions/> },
     Reporting: { roles: managementRoles, element: <Reporting currentUser={user}/> },
     Offices: {

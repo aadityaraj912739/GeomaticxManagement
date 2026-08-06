@@ -14,6 +14,8 @@ import { attendanceRouter, auditRouter, dashboardRouter, reportingRouter, submis
 import aiRouter from "./routes/ai.js";
 import tasksRouter from "./routes/tasks.js";
 import notificationsRouter from "./routes/notifications.js";
+import marketingRouter from "./routes/marketing.js";
+import { ensureMarketingAttendanceSchema } from "./services/featureSchema.js";
 
 for (const key of ["MYSQL_PASSWORD", "JWT_SECRET", "ADMIN_EMAIL", "ADMIN_PASSWORD"]) {
   if (!process.env[key]) throw new Error(`Missing required environment variable: ${key}`);
@@ -40,6 +42,7 @@ app.use("/api/clients", crudRouter("Client"));
 app.use("/api/projects", crudRouter("Project"));
 app.use("/api/tasks", tasksRouter);
 app.use("/api/notifications", notificationsRouter);
+app.use("/api/marketing", marketingRouter);
 app.use("/api/spatial-records", crudRouter("SpatialRecord", ["ADMIN", "MANAGER", "SURVEYOR"]));
 app.use("/api/processing-jobs", crudRouter("ProcessingJob", ["ADMIN", "MANAGER", "SURVEYOR"]));
 app.use("/api/asset-records", crudRouter("AssetRecord", ["ADMIN", "MANAGER", "HR"]));
@@ -71,6 +74,7 @@ app.use((err, _req, res, _next) => {
 async function start() {
   await sequelize.authenticate();
   await sequelize.sync({ alter: process.env.SEQUELIZE_SYNC_ALTER === "true" });
+  await ensureMarketingAttendanceSchema();
   const email = process.env.ADMIN_EMAIL.toLowerCase();
   const [admin, created] = await User.findOrCreate({
     where: { email },

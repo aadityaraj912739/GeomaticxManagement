@@ -3,6 +3,7 @@ export * from "./operations.js";
 
 import {
   Attendance,
+  AttendanceBreak,
   Client,
   Department,
   Designation,
@@ -13,6 +14,7 @@ import {
   Task,
   User
 } from "./organization.js";
+import { BidCostItem, MarketingActivity, MarketingOpportunity } from "./marketing.js";
 import {
   AiRecord,
   AiInference,
@@ -40,6 +42,10 @@ User.hasMany(Task, { foreignKey: { name: "assigneeId", field: "assigneeId" } });
 User.hasMany(Notification, { foreignKey: { name: "userId", field: "user_id" }, onDelete: "CASCADE" }); Notification.belongsTo(User, { foreignKey: { name: "userId", field: "user_id" } });
 Task.hasMany(Notification, { foreignKey: { name: "taskId", field: "task_id" }, onDelete: "CASCADE" }); Notification.belongsTo(Task, { foreignKey: { name: "taskId", field: "task_id" } });
 Employee.hasMany(Attendance, { foreignKey: { name: "employeeId", field: "employee_id" } }); Attendance.belongsTo(Employee, { foreignKey: { name: "employeeId", field: "employee_id" } });
+Attendance.hasMany(AttendanceBreak, { as: "breaks", foreignKey: { name: "attendanceId", field: "attendance_id" }, onDelete: "CASCADE" }); AttendanceBreak.belongsTo(Attendance, { foreignKey: { name: "attendanceId", field: "attendance_id" } });
+User.hasMany(MarketingOpportunity, { as: "assignedOpportunities", foreignKey: { name: "assignedExecutiveId", field: "assigned_executive_id" } }); MarketingOpportunity.belongsTo(User, { as: "assignedExecutive", foreignKey: { name: "assignedExecutiveId", field: "assigned_executive_id" } });
+MarketingOpportunity.hasMany(BidCostItem, { as: "costItems", foreignKey: { name: "opportunityId", field: "opportunity_id" }, onDelete: "CASCADE" }); BidCostItem.belongsTo(MarketingOpportunity, { foreignKey: { name: "opportunityId", field: "opportunity_id" } });
+MarketingOpportunity.hasMany(MarketingActivity, { as: "activities", foreignKey: { name: "opportunityId", field: "opportunity_id" }, onDelete: "CASCADE" }); MarketingActivity.belongsTo(MarketingOpportunity, { foreignKey: { name: "opportunityId", field: "opportunity_id" } });
 SurveyForm.hasMany(SurveySubmission, { foreignKey: { name: "surveyFormId", field: "survey_form_id" } }); SurveySubmission.belongsTo(SurveyForm, { foreignKey: { name: "surveyFormId", field: "survey_form_id" } });
 Project.hasMany(SurveySubmission, { foreignKey: { name: "projectId", field: "project_id" } }); SurveySubmission.belongsTo(Project, { foreignKey: { name: "projectId", field: "project_id" } });
 User.hasMany(SurveySubmission, { foreignKey: { name: "submittedById", field: "submitted_by_id" } }); SurveySubmission.belongsTo(User, { as: "submittedBy", foreignKey: { name: "submittedById", field: "submitted_by_id" } });
@@ -55,4 +61,6 @@ User.hasMany(AiInference, { as: "reviewedAiInferences", foreignKey: { name: "rev
 Project.hasMany(SecurityRegister, { foreignKey: { name: "projectId", field: "project_id" } }); SecurityRegister.belongsTo(Project, { foreignKey: { name: "projectId", field: "project_id" } });
 User.hasMany(AuditLog, { foreignKey: { name: "actorId", field: "actorId" } }); AuditLog.belongsTo(User, { as: "actor", foreignKey: { name: "actorId", field: "actorId" } });
 
-export const models = { User, Department, Office, Designation, Employee, Client, Project, Task, Notification, Attendance, SurveyForm, SurveySubmission, SpatialRecord, ProcessingJob, AssetRecord, CommercialRecord, QcApproval, AiRecord, AiInference, SecurityRegister, AuditLog };
+export const models = { User, Department, Office, Designation, Employee, Client, Project, Task, Notification, Attendance, AttendanceBreak, MarketingOpportunity, BidCostItem, MarketingActivity, SurveyForm, SurveySubmission, SpatialRecord, ProcessingJob, AssetRecord, CommercialRecord, QcApproval, AiRecord, AiInference, SecurityRegister, AuditLog };
+
+export * from "./marketing.js";

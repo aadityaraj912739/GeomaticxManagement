@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../services/api";
 
 const empty = { name: "", email: "", password: "", role: "EMPLOYEE" };
-const roles = ["ADMIN", "MANAGER", "HR", "SURVEYOR", "EMPLOYEE"];
+const roles = ["ADMIN", "MANAGER", "HR", "SURVEYOR", "EMPLOYEE", "MARKETING_EXECUTIVE", "MARKETING_MANAGER"];
 
 export default function Users({ currentUser }) {
   const [rows, setRows] = useState([]);

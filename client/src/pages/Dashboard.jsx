@@ -10,7 +10,8 @@ const ICONS = {
   employees: '👥', offices: '🏢', clients: '👤', projects: '📋',
   tasks: '✅', attendance: '⏰', surveyForms: '📝', submissions: '📄',
   spatialRecords: '🗺️', processingJobs: '⚙️', assets: '📦',
-  commercialRecords: '💰', approvals: '✔️', aiRecords: '🤖', securityRegisters: '🔒'
+  commercialRecords: '💰', approvals: '✔️', aiRecords: '🤖', securityRegisters: '🔒',
+  marketingOpportunities: 'M', activeBreaks: 'B'
 };
 
 // FACEBOOK COLORS
@@ -50,6 +51,8 @@ export default function Dashboard() {
     { key: 'approvals', label: 'QC Approvals', value: data.approvals || 0, icon: ICONS.approvals, color: '#42B72A' },
     { key: 'aiRecords', label: 'AI Records', value: data.aiRecords || 0, icon: ICONS.aiRecords, color: '#6C5CE7' },
     { key: 'securityRegisters', label: 'Security', value: data.securityRegisters || 0, icon: ICONS.securityRegisters, color: '#E74C3C' },
+    { key: 'marketingOpportunities', label: 'Marketing opportunities', value: data.marketingOpportunities || 0, icon: ICONS.marketingOpportunities, color: '#A47612' },
+    { key: 'activeBreaks', label: 'Employees on break', value: data.activeBreaks || 0, icon: ICONS.activeBreaks, color: '#E67E22' },
   ];
 
   const sortedData = [...cardData].sort((a, b) => b.value - a.value);
@@ -65,7 +68,7 @@ export default function Dashboard() {
     value: item.value || 1
   }));
 
-  const totalRecords = Object.values(data).reduce((a, b) => a + b, 0);
+  const totalRecords = cardData.reduce((sum, item) => sum + item.value, 0);
 
   return (
     <div className="dash-wrapper">
@@ -99,10 +102,19 @@ export default function Dashboard() {
                 <div className="dash-card-label">{item.label}</div>
               </div>
             </div>
-            <div className="dash-card-bar" style={{ background: item.color, width: `${Math.min((item.value / Math.max(...Object.values(data))) * 100, 100)}%` }}></div>
+            <div className="dash-card-bar" style={{ background: item.color, width: `${Math.min((item.value / Math.max(1, ...cardData.map(card => card.value))) * 100, 100)}%` }}></div>
           </div>
         ))}
       </div>
+
+      {data.onBreakEmployees?.length > 0 && <div className="dash-insight-box break-monitor">
+        <h4>Live break monitor</h4>
+        {data.onBreakEmployees.map(item => <div className="dash-insight-row" key={item.id}>
+          <span className="status status-inactive">{item.breakType}</span>
+          <span className="dash-insight-label">{item.employee ? `${item.employee.firstName} ${item.employee.lastName || ""}` : "Employee"}</span>
+          <span className="muted">Since {new Date(item.startedAt).toLocaleTimeString()}</span>
+        </div>)}
+      </div>}
 
       {/* Charts Section */}
       <div className="dash-charts">
@@ -172,7 +184,7 @@ export default function Dashboard() {
               <span className="dash-rank">#{i + 1}</span>
               <span className="dash-insight-label">{item.label}</span>
               <span className="dash-insight-bar-bg">
-                <span className="dash-insight-bar" style={{ width: `${(item.value / sortedData[0].value) * 100}%`, background: item.color }}></span>
+                <span className="dash-insight-bar" style={{ width: `${sortedData[0].value ? (item.value / sortedData[0].value) * 100 : 0}%`, background: item.color }}></span>
               </span>
               <span className="dash-insight-value">{item.value.toLocaleString()}</span>
             </div>
@@ -191,11 +203,11 @@ export default function Dashboard() {
             </div>
             <div className="dash-quick-item">
               <span>Highest</span>
-              <strong style={{ color: '#F7B928' }}>{Math.max(...Object.values(data)).toLocaleString()}</strong>
+              <strong style={{ color: '#F7B928' }}>{Math.max(0, ...cardData.map(item => item.value)).toLocaleString()}</strong>
             </div>
             <div className="dash-quick-item">
               <span>Active</span>
-              <strong style={{ color: '#6C5CE7' }}>{Object.values(data).filter(v => v > 0).length}</strong>
+              <strong style={{ color: '#6C5CE7' }}>{cardData.filter(item => item.value > 0).length}</strong>
             </div>
           </div>
           <div className="dash-quick-note">

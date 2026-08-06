@@ -6,7 +6,7 @@ export const User = sequelize.define("User", {
   ...common, name: { type: DataTypes.STRING, allowNull: false },
   email: { type: DataTypes.STRING, allowNull: false, unique: true, validate: { isEmail: true } },
   passwordHash: { type: DataTypes.STRING, allowNull: false },
-  role: { type: DataTypes.ENUM("ADMIN", "MANAGER", "HR", "SURVEYOR", "EMPLOYEE"), defaultValue: "EMPLOYEE" },
+  role: { type: DataTypes.ENUM("ADMIN", "MANAGER", "HR", "SURVEYOR", "EMPLOYEE", "MARKETING_EXECUTIVE", "MARKETING_MANAGER"), defaultValue: "EMPLOYEE" },
   active: { type: DataTypes.BOOLEAN, defaultValue: true }
 });
 export const Department = sequelize.define("Department", {
@@ -55,5 +55,13 @@ export const Notification = sequelize.define("Notification", {
 }, { indexes: [{ fields: ["user_id", "read_at"] }, { fields: ["user_id", "created_at", "id"] }] });
 export const Attendance = sequelize.define("Attendance", {
   ...common, workDate: { type: DataTypes.DATEONLY, allowNull: false }, checkIn: { type: DataTypes.DATE, allowNull: false },
-  checkOut: DataTypes.DATE, latitude: DataTypes.DECIMAL(10, 7), longitude: DataTypes.DECIMAL(10, 7), notes: DataTypes.STRING
+  checkOut: DataTypes.DATE, latitude: DataTypes.DECIMAL(10, 7), longitude: DataTypes.DECIMAL(10, 7),
+  locationAccuracy: DataTypes.DECIMAL(10, 2), notes: DataTypes.STRING, workDescription: DataTypes.TEXT
 }, { indexes: [{ unique: true, fields: ["employee_id", "work_date"] }] });
+export const AttendanceBreak = sequelize.define("AttendanceBreak", {
+  ...common,
+  breakType: { type: DataTypes.ENUM("TEA", "LUNCH", "PERSONAL", "OTHER"), defaultValue: "TEA" },
+  startedAt: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
+  resumedAt: DataTypes.DATE,
+  notes: DataTypes.STRING
+});
