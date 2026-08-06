@@ -10,14 +10,175 @@ async function employeeForUser(userId) {
   return Employee.findOne({ where: { userId } });
 }
 
+function resolveDashboardPeriod(period) {
+  const key = String(period || "today").toLowerCase();
+  const labels = {
+    today: "Today",
+    week: "This week",
+    month: "This month",
+    all: "All time"
+  };
+  const resolved = labels[key] ? key : "today";
+  const start = resolved === "all" ? null : new Date();
+  if (start) {
+    start.setHours(0, 0, 0, 0);
+    if (resolved === "week") start.setDate(start.getDate() - 6);
+    if (resolved === "month") start.setMonth(start.getMonth() - 1);
+  }
+  return { key: resolved, label: labels[resolved], start };
+}
+
 export const dashboardRouter = Router();
-dashboardRouter.get("/", async (_req, res) => {
-  const [employees, offices, clients, projects, tasks, attendance, surveyForms, submissions, spatialRecords, processingJobs, assets, commercialRecords, approvals, aiRecords, securityRegisters, marketingOpportunities, activeBreakRows] = await Promise.all([
-    Employee.count(), Office.count(), Client.count(), Project.count(), Task.count(), Attendance.count(), SurveyForm.count(), SurveySubmission.count(),
-    SpatialRecord.count(), ProcessingJob.count(), AssetRecord.count(), CommercialRecord.count(), QcApproval.count(), AiInference.count(), SecurityRegister.count(), MarketingOpportunity.count(),
-    AttendanceBreak.findAll({ where: { resumedAt: null }, include: [{ model: Attendance, include: [{ model: Employee, attributes: ["id", "employeeCode", "firstName", "lastName"] }] }], order: [["startedAt", "DESC"]] })
-  ]);
-  res.json({ employees, offices, clients, projects, tasks, attendance, surveyForms, submissions, spatialRecords, processingJobs, assets, commercialRecords, approvals, aiRecords, securityRegisters, marketingOpportunities, activeBreaks: activeBreakRows.length, onBreakEmployees: activeBreakRows.map(row => ({ id: row.id, breakType: row.breakType, startedAt: row.startedAt, employee: row.Attendance?.Employee || null })) });
+dashboardRouter.get("/", async (req, res, next) => {
+  try {
+    const period = resolveDashboardPeriod(req.query.period);
+    const requestedProjectId = req.query.projectId ? String(req.query.projectId) : "";
+    const taskWhere = period.start ? { [Op.or]: [{ createdAt: { [Op.gte]: period.start } }, { updatedAt: { [Op.gte]: period.start } }] } : {};
+    const canSeeBreakHistory = supervisoryRoles.includes(req.user.role);
+    const [employees, offices, clients, projects, tasks, attendance, surveyForms, submissions, spatialRecords, processingJobs, assets, commercialRecords, approvals, aiRecords, securityRegisters, marketingOpportunities, activeBreakCount, recentActiveBreakRows, recentBreakHistoryRows, taskRows, employeeRecord] = await Promise.all([
+      Employee.count(), Office.count(), Client.count(), Project.count(), Task.count(), Attendance.count(), SurveyForm.count(), SurveySubmission.count(),
+      SpatialRecord.count(), ProcessingJob.count(), AssetRecord.count(), CommercialRecord.count(), QcApproval.count(), AiInference.count(), SecurityRegister.count(), MarketingOpportunity.count(),
+      AttendanceBreak.count({ where: { resumedAt: null } }),
+      AttendanceBreak.findAll({
+        where: { resumedAt: null },
+        include: [{ model: Attendance, include: [{ model: Employee, attributes: ["id", "employeeCode", "firstName", "lastName"] }] }],
+        order: [["startedAt", "DESC"]],
+        limit: 12
+      }),
+      canSeeBreakHistory ? AttendanceBreak.findAll({
+        include: [{ model: Attendance, include: [{ model: Employee, attributes: ["id", "employeeCode", "firstName", "lastName"] }] }],
+        order: [["startedAt", "DESC"]],
+        limit: 20
+      }) : Promise.resolve([]),
+      Task.findAll({
+        where: taskWhere,
+        include: [
+          { model: Project, attributes: ["id", "code", "name", "status"] },
+          { model: User, as: "assignee", attributes: ["id", "name"] }
+        ],
+        order: [["updatedAt", "DESC"]]
+      }),
+      employeeForUser(req.user.id)
+    ]);
+
+    const projectProgressMap = new Map();
+    const employeeProgressMap = new Map();
+    let totalTaskProgress = 0;
+    let completedTasks = 0;
+
+    for (const task of taskRows) {
+      const progressValue = Number(task.progress || 0);
+      totalTaskProgress += progressValue;
+      if (task.status === "DONE") completedTasks += 1;
+
+      const project = task.Project;
+      const projectKey = project?.id || task.ProjectId || "unassigned-project";
+      if (!projectProgressMap.has(projectKey)) {
+        projectProgressMap.set(projectKey, {
+          id: project?.id || projectKey,
+          code: project?.code || "UNASSIGNED",
+          name: project?.name || "Unassigned project",
+          status: project?.status || "PLANNED",
+          totalTasks: 0,
+          completedTasks: 0,
+          progressTotal: 0,
+          lastUpdatedAt: null
+        });
+      }
+      const projectBucket = projectProgressMap.get(projectKey);
+      projectBucket.totalTasks += 1;
+      projectBucket.completedTasks += task.status === "DONE" ? 1 : 0;
+      projectBucket.progressTotal += progressValue;
+      const updatedAt = task.updatedAt ? new Date(task.updatedAt).getTime() : null;
+      if (updatedAt && (!projectBucket.lastUpdatedAt || updatedAt > projectBucket.lastUpdatedAt)) projectBucket.lastUpdatedAt = updatedAt;
+
+      const assigneeName = task.assignee?.name || "Unassigned employee";
+      const employeeKey = task.assigneeId || assigneeName;
+      if (!employeeProgressMap.has(employeeKey)) {
+        employeeProgressMap.set(employeeKey, {
+          id: task.assigneeId || employeeKey,
+          name: assigneeName,
+          totalTasks: 0,
+          completedTasks: 0,
+          progressTotal: 0,
+          lastUpdatedAt: null
+        });
+      }
+      const employeeBucket = employeeProgressMap.get(employeeKey);
+      employeeBucket.totalTasks += 1;
+      employeeBucket.completedTasks += task.status === "DONE" ? 1 : 0;
+      employeeBucket.progressTotal += progressValue;
+      if (updatedAt && (!employeeBucket.lastUpdatedAt || updatedAt > employeeBucket.lastUpdatedAt)) employeeBucket.lastUpdatedAt = updatedAt;
+    }
+
+    const serializeProgress = bucket => ({
+      id: bucket.id,
+      code: bucket.code,
+      name: bucket.name,
+      status: bucket.status,
+      totalTasks: bucket.totalTasks,
+      completedTasks: bucket.completedTasks,
+      progress: bucket.totalTasks ? Math.round(bucket.progressTotal / bucket.totalTasks) : 0,
+      lastUpdatedAt: bucket.lastUpdatedAt ? new Date(bucket.lastUpdatedAt).toISOString() : null
+    });
+
+    const openAttendance = employeeRecord
+      ? await Attendance.findOne({
+          where: { employeeId: employeeRecord.id, checkOut: null },
+          include: [
+            { model: Employee, attributes: ["id", "employeeCode", "firstName", "lastName"] },
+            { model: AttendanceBreak, as: "breaks", order: [["startedAt", "ASC"]] }
+          ],
+          order: [["checkIn", "DESC"]]
+        })
+      : null;
+
+    const myAttendance = openAttendance ? (() => {
+      const attendanceJson = openAttendance.toJSON();
+      return { ...attendanceJson, activeBreak: attendanceJson.breaks?.find(entry => !entry.resumedAt) || null };
+    })() : null;
+
+    const formatBreakRow = row => {
+      const attendanceJson = row.Attendance ? row.Attendance.toJSON() : null;
+      const employee = attendanceJson?.Employee || null;
+      return {
+        id: row.id,
+        breakType: row.breakType,
+        startedAt: row.startedAt,
+        resumedAt: row.resumedAt,
+        status: row.resumedAt ? "RESUMED" : "ACTIVE",
+        employee,
+        employeeName: employee ? `${employee.firstName} ${employee.lastName || ""}`.trim() : "Employee",
+        workDate: attendanceJson?.workDate || null
+      };
+    };
+
+    const projectProgress = [...projectProgressMap.values()].map(serializeProgress).sort((a, b) => b.progress - a.progress || b.totalTasks - a.totalTasks);
+    const employeeProgress = [...employeeProgressMap.values()].map(serializeProgress).sort((a, b) => b.progress - a.progress || b.totalTasks - a.totalTasks);
+    const selectedProjectProgress = projectProgress.find(item => item.id === requestedProjectId) || projectProgress[0] || null;
+    const projectOptions = projectProgress.map(item => ({ id: item.id, code: item.code, name: item.name, status: item.status }));
+    const recentBreakHistory = recentBreakHistoryRows.map(formatBreakRow);
+
+    res.json({
+      employees, offices, clients, projects, tasks, attendance, surveyForms, submissions, spatialRecords, processingJobs, assets, commercialRecords, approvals, aiRecords, securityRegisters, marketingOpportunities,
+      activeBreaks: activeBreakCount,
+      onBreakEmployees: recentActiveBreakRows.map(row => ({ id: row.id, breakType: row.breakType, startedAt: row.startedAt, employee: row.Attendance?.Employee || null })),
+      period: period.key,
+      periodLabel: period.label,
+      projectId: selectedProjectProgress?.id || "",
+      progressSummary: {
+        taskCount: taskRows.length,
+        completedTasks,
+        averageProgress: taskRows.length ? Math.round(totalTaskProgress / taskRows.length) : 0
+      },
+      projectOptions,
+      selectedProjectProgress,
+      projectProgress,
+      employeeProgress,
+      recentBreakHistory,
+      myAttendance
+    });
+  } catch (e) { next(e); }
 });
 
 export const reportingRouter = Router();

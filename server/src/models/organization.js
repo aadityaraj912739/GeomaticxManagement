@@ -64,4 +64,4 @@ export const AttendanceBreak = sequelize.define("AttendanceBreak", {
   startedAt: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
   resumedAt: DataTypes.DATE,
   notes: DataTypes.STRING
-});
+}, { indexes: [{ fields: ["attendance_id", "started_at"] }, { fields: ["resumed_at"] }] });

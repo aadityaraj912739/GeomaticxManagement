@@ -16,17 +16,82 @@ const ICONS = {
 
 // FACEBOOK COLORS
 const FB_COLORS = ['#1877F2', '#42B72A', '#F7B928', '#E74C3C', '#8B9DC3', '#6C5CE7', '#1DA1F2', '#E1306C'];
+const PERIOD_OPTIONS = [
+  { value: "today", label: "Today" },
+  { value: "week", label: "This week" },
+  { value: "month", label: "This month" },
+  { value: "all", label: "All time" }
+];
 
 export default function Dashboard() {
   const [data, setData] = useState({});
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [period, setPeriod] = useState(() => localStorage.getItem("dashboard-period") || "today");
+  const [projectId, setProjectId] = useState("");
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [breakType, setBreakType] = useState("TEA");
 
   useEffect(() => {
-    api("/dashboard").then(res => {
-      setData(res);
-      setLoading(false);
-    });
-  }, []);
+    let cancelled = false;
+    const load = async () => {
+      setLoading(true);
+      setError("");
+      try {
+        const query = new URLSearchParams({ period });
+        if (projectId) query.set("projectId", projectId);
+        const res = await api(`/dashboard?${query.toString()}`);
+        if (!cancelled) setData(res);
+      } catch (e) {
+        if (!cancelled) setError(e.message);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [period, projectId, refreshKey]);
+
+  useEffect(() => {
+    localStorage.setItem("dashboard-period", period);
+  }, [period]);
+
+  useEffect(() => {
+    if (!projectId && data.projectId) setProjectId(data.projectId);
+  }, [data.projectId, projectId]);
+
+  const currentAttendance = data.myAttendance;
+  const activeBreak = currentAttendance?.activeBreak || currentAttendance?.breaks?.find(entry => !entry.resumedAt);
+
+  const startBreak = async () => {
+    if (!currentAttendance?.id || activeBreak) return;
+    try {
+      setError("");
+      setMessage("");
+      await api(`/attendance/${currentAttendance.id}/breaks`, {
+        method: "POST",
+        body: JSON.stringify({ breakType })
+      });
+      setMessage(`${breakType.toLowerCase()} break started`);
+      setRefreshKey(value => value + 1);
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  const resumeWork = async () => {
+    if (!currentAttendance?.id || !activeBreak?.id) return;
+    try {
+      setError("");
+      setMessage("");
+      await api(`/attendance/${currentAttendance.id}/breaks/${activeBreak.id}/resume`, { method: "PATCH" });
+      setMessage("Work resumed successfully");
+      setRefreshKey(value => value + 1);
+    } catch (e) {
+      setError(e.message);
+    }
+  };
 
   if (loading) return (
     <div className="dash-loading">
@@ -34,6 +99,14 @@ export default function Dashboard() {
       <p>Loading dashboard...</p>
     </div>
   );
+
+  const projectProgress = data.projectProgress || [];
+  const employeeProgress = data.employeeProgress || [];
+  const projectOptions = data.projectOptions || [];
+  const selectedProject = data.selectedProjectProgress || null;
+  const recentBreakHistory = data.recentBreakHistory || [];
+  const selectedPeriodLabel = data.periodLabel || PERIOD_OPTIONS.find(option => option.value === period)?.label || "Today";
+  const summaryProgress = data.progressSummary || { taskCount: 0, completedTasks: 0, averageProgress: 0 };
 
   const cardData = [
     { key: 'employees', label: 'Employees', value: data.employees || 0, icon: ICONS.employees, color: '#1877F2' },
@@ -77,17 +150,22 @@ export default function Dashboard() {
         <div>
           <span className="dash-eyebrow">● LIVE DASHBOARD</span>
           <h1 className="dash-title">Geomaticx Analytics</h1>
-          <p className="dash-sub">{totalRecords.toLocaleString()} total records · {Object.keys(data).length} modules</p>
+          <p className="dash-sub">{totalRecords.toLocaleString()} total records · {Object.keys(data).length} modules · {selectedPeriodLabel}</p>
         </div>
         <div className="dash-controls">
-          <select className="dash-select">
-            <option>Today</option>
-            <option>This Week</option>
-            <option>This Month</option>
+          <select className="dash-select" value={projectId} onChange={event => setProjectId(event.target.value)}>
+            <option value="">All projects</option>
+            {projectOptions.map(option => <option key={option.id} value={option.id}>{option.code} - {option.name}</option>)}
           </select>
-          <button className="dash-btn">⟳ Refresh</button>
+          <select className="dash-select" value={period} onChange={event => setPeriod(event.target.value)}>
+            {PERIOD_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+          <button className="dash-btn" onClick={() => setRefreshKey(value => value + 1)}>⟳ Refresh</button>
         </div>
       </div>
+
+      {error && <p className="error">{error}</p>}
+      {message && <p className="success">{message}</p>}
 
       {/* Stats Grid */}
       <div className="dash-grid">
@@ -107,14 +185,85 @@ export default function Dashboard() {
         ))}
       </div>
 
-      {data.onBreakEmployees?.length > 0 && <div className="dash-insight-box break-monitor">
-        <h4>Live break monitor</h4>
-        {data.onBreakEmployees.map(item => <div className="dash-insight-row" key={item.id}>
-          <span className="status status-inactive">{item.breakType}</span>
-          <span className="dash-insight-label">{item.employee ? `${item.employee.firstName} ${item.employee.lastName || ""}` : "Employee"}</span>
-          <span className="muted">Since {new Date(item.startedAt).toLocaleTimeString()}</span>
-        </div>)}
-      </div>}
+      <div className="dash-insights">
+        <div className="dash-insight-box">
+          <h4>Project progress</h4>
+          <p className="dash-section-note">{summaryProgress.taskCount.toLocaleString()} tasks in {selectedPeriodLabel.toLowerCase()} · average {summaryProgress.averageProgress}% complete</p>
+          {selectedProject && <div className="dash-project-focus">
+            <div>
+              <span className="dash-project-code">{selectedProject.code}</span>
+              <strong>{selectedProject.name}</strong>
+            </div>
+            <div className="dash-project-meter">
+              <span style={{ width: `${selectedProject.progress}%` }} />
+            </div>
+            <div className="dash-project-stats">
+              <span>{selectedProject.progress}% done</span>
+              <span>{selectedProject.completedTasks}/{selectedProject.totalTasks} tasks</span>
+            </div>
+          </div>}
+          {projectProgress.length ? projectProgress.map(item => <div className="dash-insight-row" key={item.id}>
+            <span className="dash-insight-label">{item.code} · {item.name}</span>
+            <span className="dash-insight-bar-bg"><span className="dash-insight-bar" style={{ width: `${item.progress}%`, background: item.progress >= 80 ? '#42B72A' : '#1877F2' }}></span></span>
+            <span className="dash-insight-value">{item.progress}%</span>
+          </div>) : <p className="muted">No project activity found for this period.</p>}
+        </div>
+
+        <div className="dash-insight-box">
+          <h4>Employee work progress</h4>
+          <p className="dash-section-note">Task progress grouped by assignee in the selected window.</p>
+          {employeeProgress.length ? employeeProgress.map(item => <div className="dash-insight-row" key={item.id}>
+            <span className="dash-insight-label">{item.name}</span>
+            <span className="dash-insight-bar-bg"><span className="dash-insight-bar" style={{ width: `${item.progress}%`, background: item.progress >= 80 ? '#42B72A' : '#6C5CE7' }}></span></span>
+            <span className="dash-insight-value">{item.progress}%</span>
+          </div>) : <p className="muted">No employee activity found for this period.</p>}
+
+          <div className="dash-break-panel">
+            <div className="dash-break-header">
+              <div>
+                <h5>Break controls</h5>
+                <p className="dash-section-note">{currentAttendance ? `Check-in ${new Date(currentAttendance.checkIn).toLocaleTimeString()}` : "Check in from Attendance to enable break controls."}</p>
+              </div>
+              {activeBreak ? <span className="status status-inactive">{activeBreak.breakType} break active</span> : <span className="status status-active">Ready</span>}
+            </div>
+            {currentAttendance && !currentAttendance.checkOut && <div className="dash-break-actions">
+              <select className="dash-select" value={breakType} onChange={event => setBreakType(event.target.value)}>
+                <option value="TEA">TEA</option>
+                <option value="LUNCH">LUNCH</option>
+                <option value="PERSONAL">PERSONAL</option>
+                <option value="OTHER">OTHER</option>
+              </select>
+              {activeBreak ? <button type="button" className="dash-btn" onClick={resumeWork}>Resume work</button> : <button type="button" className="dash-btn" onClick={startBreak}>Take break</button>}
+            </div>}
+            {!currentAttendance && <p className="muted">No open attendance record is available for your account yet.</p>}
+          </div>
+
+          {data.onBreakEmployees?.length > 0 && <>
+            <h4 className="dash-break-heading">Live break monitor</h4>
+            {data.onBreakEmployees.map(item => <div className="dash-insight-row" key={item.id}>
+              <span className="status status-inactive">{item.breakType}</span>
+              <span className="dash-insight-label">{item.employee ? `${item.employee.firstName} ${item.employee.lastName || ""}` : "Employee"}</span>
+              <span className="muted">Since {new Date(item.startedAt).toLocaleTimeString()}</span>
+            </div>)}
+          </>}
+
+          <div className="dash-break-panel">
+            <h4>Break history</h4>
+            <p className="dash-section-note">Most recent break and resume events, capped for performance.</p>
+            {recentBreakHistory.length ? recentBreakHistory.map(item => <div className="dash-break-history-row" key={item.id}>
+              <div>
+                <strong>{item.employeeName}</strong>
+                <span>{item.breakType}</span>
+              </div>
+              <div>
+                <span>Break: {new Date(item.startedAt).toLocaleString()}</span>
+                <span>{item.resumedAt ? `Resumed: ${new Date(item.resumedAt).toLocaleString()}` : "Resumed: Pending"}</span>
+              </div>
+              <span className={`status ${item.status === 'ACTIVE' ? 'status-inactive' : 'status-active'}`}>{item.status === 'ACTIVE' ? 'Active' : 'Resumed'}</span>
+            </div>) : <p className="muted">No break history available yet.</p>}
+          </div>
+        </div>
+      </div>
 
       {/* Charts Section */}
       <div className="dash-charts">
@@ -172,48 +321,6 @@ export default function Dashboard() {
               />
             </PieChart>
           </ResponsiveContainer>
-        </div>
-      </div>
-
-      {/* Insights */}
-      <div className="dash-insights">
-        <div className="dash-insight-box">
-          <h4>🏆 Top Performers</h4>
-          {sortedData.slice(0, 5).map((item, i) => (
-            <div key={i} className="dash-insight-row">
-              <span className="dash-rank">#{i + 1}</span>
-              <span className="dash-insight-label">{item.label}</span>
-              <span className="dash-insight-bar-bg">
-                <span className="dash-insight-bar" style={{ width: `${sortedData[0].value ? (item.value / sortedData[0].value) * 100 : 0}%`, background: item.color }}></span>
-              </span>
-              <span className="dash-insight-value">{item.value.toLocaleString()}</span>
-            </div>
-          ))}
-        </div>
-        <div className="dash-insight-box">
-          <h4>📌 Quick Stats</h4>
-          <div className="dash-quick-grid">
-            <div className="dash-quick-item">
-              <span>Total</span>
-              <strong style={{ color: '#1877F2' }}>{totalRecords.toLocaleString()}</strong>
-            </div>
-            <div className="dash-quick-item">
-              <span>Average</span>
-              <strong style={{ color: '#42B72A' }}>{(totalRecords / cardData.length).toFixed(0)}</strong>
-            </div>
-            <div className="dash-quick-item">
-              <span>Highest</span>
-              <strong style={{ color: '#F7B928' }}>{Math.max(0, ...cardData.map(item => item.value)).toLocaleString()}</strong>
-            </div>
-            <div className="dash-quick-item">
-              <span>Active</span>
-              <strong style={{ color: '#6C5CE7' }}>{cardData.filter(item => item.value > 0).length}</strong>
-            </div>
-          </div>
-          <div className="dash-quick-note">
-            <span>🟢 All systems operational</span>
-            <span className="dash-timestamp">Updated {new Date().toLocaleTimeString()}</span>
-          </div>
         </div>
       </div>
     </div>

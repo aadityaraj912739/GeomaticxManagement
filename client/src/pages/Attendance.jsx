@@ -4,6 +4,21 @@ import "../marketing.css";
 
 const supervisoryRoles = ["ADMIN", "MANAGER", "HR"];
 const employeeName = employee => `${employee.firstName} ${employee.lastName || ""}`.trim();
+const PERIOD_LABELS = {
+  today: "Today",
+  week: "This week",
+  month: "This month",
+  all: "All time"
+};
+
+const getPeriodStart = period => {
+  if (period === "all") return null;
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  if (period === "week") start.setDate(start.getDate() - 6);
+  if (period === "month") start.setMonth(start.getMonth() - 1);
+  return start;
+};
 
 export default function Attendance({ currentUser }) {
   const [rows, setRows] = useState([]);
@@ -16,6 +31,7 @@ export default function Attendance({ currentUser }) {
   const [message, setMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const canChooseEmployee = supervisoryRoles.includes(currentUser.role);
+  const [dashboardPeriod, setDashboardPeriod] = useState(() => localStorage.getItem("dashboard-period") || "today");
 
   const load = async () => {
     try {
@@ -41,10 +57,23 @@ export default function Attendance({ currentUser }) {
     if (ownEmployee) setEmployeeId(ownEmployee.id);
   }, [employees, canChooseEmployee, employeeId, currentUser.id]);
 
+  useEffect(() => {
+    const syncPeriod = () => setDashboardPeriod(localStorage.getItem("dashboard-period") || "today");
+    window.addEventListener("storage", syncPeriod);
+    syncPeriod();
+    return () => window.removeEventListener("storage", syncPeriod);
+  }, []);
+
   const today = new Date().toISOString().slice(0, 10);
+  const activePeriod = dashboardPeriod || "today";
+  const periodStart = getPeriodStart(activePeriod);
+  const filteredRows = useMemo(() => {
+    if (!periodStart) return rows;
+    return rows.filter(row => new Date(row.workDate) >= periodStart);
+  }, [rows, periodStart]);
   const todayAttendance = useMemo(
-    () => rows.find(row => row.workDate === today && (!employeeId || row.employeeId === employeeId)),
-    [rows, employeeId]
+    () => filteredRows.find(row => row.workDate === today && (!employeeId || row.employeeId === employeeId)),
+    [filteredRows, employeeId]
   );
 
   const locate = () => new Promise((resolve, reject) => {
@@ -108,9 +137,9 @@ export default function Attendance({ currentUser }) {
   return <section>
     <div className="page-head">
       <div><span className="eyebrow">Employee self-service</span><h2>Attendance</h2></div>
-      <span className="count">{rows.length} entries</span>
+      <span className="count">{filteredRows.length} entries</span>
     </div>
-    <p className="muted">Check-in automatically captures your live location. Before check-out, add the work completed today. Break and resume events remain visible in attendance history.</p>
+    <p className="muted">Check-in automatically captures your live location. Attendance is filtered from dashboard selection: {PERIOD_LABELS[activePeriod] || PERIOD_LABELS.today}. Before check-out, add the work completed today. Break and resume events remain visible in attendance history.</p>
     {error && <p className="error">{error}</p>}
     {message && <p className="success">{message}</p>}
     <form className="form-grid" onSubmit={checkIn}>
@@ -125,7 +154,7 @@ export default function Attendance({ currentUser }) {
     </form>
     {todayAttendance && <p className="muted">Today&apos;s attendance is already recorded. Use the open row below to check out.</p>}
     <div className="table-wrap"><table><thead><tr><th>Employee</th><th>Work date</th><th>Check in</th><th>Check out</th><th>Location</th><th>Notes / work done</th><th>Break history</th><th>Action</th></tr></thead>
-      <tbody>{rows.length ? rows.map(row => { const activeBreak = row.breaks?.find(entry => !entry.resumedAt); return <tr key={row.id}>
+      <tbody>{filteredRows.length ? filteredRows.map(row => { const activeBreak = row.breaks?.find(entry => !entry.resumedAt); return <tr key={row.id}>
         <td>{row.Employee ? employeeName(row.Employee) : currentUser.name}</td>
         <td>{row.workDate}</td>
         <td>{row.checkIn ? new Date(row.checkIn).toLocaleTimeString() : "-"}</td>
@@ -137,7 +166,7 @@ export default function Attendance({ currentUser }) {
           ? <button className="link" onClick={() => resumeWork(row.id, activeBreak.id)}>Resume work</button>
           : <><select aria-label="Break type" value={breakType} onChange={event => setBreakType(event.target.value)}><option>TEA</option><option>LUNCH</option><option>PERSONAL</option><option>OTHER</option></select><button className="link" onClick={() => startBreak(row.id)}>Take break</button><input aria-label="Work completed today" value={workDescription} onChange={event => setWorkDescription(event.target.value)} placeholder="Work completed today"/><button className="link" disabled={!workDescription.trim()} onClick={() => checkOut(row.id)}>Check out</button></>}
         </div> : <span className="status status-active">Completed</span>}</td>
-      </tr>}) : <tr><td className="empty" colSpan="8">No attendance recorded yet.</td></tr>}</tbody>
+      </tr>}) : <tr><td className="empty" colSpan="8">No attendance recorded for {PERIOD_LABELS[activePeriod] || PERIOD_LABELS.today}.</td></tr>}</tbody>
     </table></div>
   </section>;
 }
