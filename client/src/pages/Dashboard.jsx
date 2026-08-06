@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../services/api";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer,
@@ -22,6 +22,13 @@ const PERIOD_OPTIONS = [
   { value: "month", label: "This month" },
   { value: "all", label: "All time" }
 ];
+const ATTENDANCE_LABELS = {
+  PRESENT: "Present",
+  ON_BREAK: "On break",
+  CHECKED_OUT: "Checked out",
+  ABSENT: "Absent"
+};
+const TASK_LABELS = { TODO: "To do", IN_PROGRESS: "In progress", REVIEW: "Review", DONE: "Done", UNASSIGNED: "No task" };
 
 export default function Dashboard() {
   const [data, setData] = useState({});
@@ -32,6 +39,12 @@ export default function Dashboard() {
   const [projectId, setProjectId] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
   const [breakType, setBreakType] = useState("TEA");
+  const [breakSubmitting, setBreakSubmitting] = useState(false);
+  const [workforceProjectId, setWorkforceProjectId] = useState("");
+  const [workforceEmployeeId, setWorkforceEmployeeId] = useState("");
+  const [workforceAttendance, setWorkforceAttendance] = useState("");
+  const [workforceTaskStatus, setWorkforceTaskStatus] = useState("");
+  const [workforceSearch, setWorkforceSearch] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -64,19 +77,34 @@ export default function Dashboard() {
   const currentAttendance = data.myAttendance;
   const activeBreak = currentAttendance?.activeBreak || currentAttendance?.breaks?.find(entry => !entry.resumedAt);
 
+  const locate = () => new Promise((resolve, reject) => {
+    if (!navigator.geolocation) return reject(new Error("Location is not supported by this browser"));
+    navigator.geolocation.getCurrentPosition(
+      position => resolve({ latitude: position.coords.latitude, longitude: position.coords.longitude, locationAccuracy: position.coords.accuracy }),
+      error => reject(new Error(error.code === 1 ? "Location permission is required to punch in before the break" : "Current location could not be detected. Please enable GPS and retry")),
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  });
+
   const startBreak = async () => {
-    if (!currentAttendance?.id || activeBreak) return;
+    if (activeBreak || breakSubmitting) return;
     try {
+      setBreakSubmitting(true);
       setError("");
       setMessage("");
-      await api(`/attendance/${currentAttendance.id}/breaks`, {
+      const location = currentAttendance ? {} : await locate();
+      const result = await api("/attendance/breaks/start", {
         method: "POST",
-        body: JSON.stringify({ breakType })
+        body: JSON.stringify({ breakType, ...location })
       });
-      setMessage(`${breakType.toLowerCase()} break started`);
+      setMessage(result.attendanceCreated
+        ? `Location captured, punch-in recorded and ${breakType.toLowerCase()} break started`
+        : `${breakType.toLowerCase()} break started`);
       setRefreshKey(value => value + 1);
     } catch (e) {
       setError(e.message);
+    } finally {
+      setBreakSubmitting(false);
     }
   };
 
@@ -93,6 +121,19 @@ export default function Dashboard() {
     }
   };
 
+  const filteredWorkforce = useMemo(() => {
+    const search = workforceSearch.trim().toLowerCase();
+    return (data.workforceStatus || []).filter(row => {
+      if (workforceProjectId && row.projectId !== workforceProjectId) return false;
+      if (workforceEmployeeId && row.employeeId !== workforceEmployeeId) return false;
+      if (workforceAttendance === "ATTENDED" && row.attendanceStatus === "ABSENT") return false;
+      if (workforceAttendance && workforceAttendance !== "ATTENDED" && row.attendanceStatus !== workforceAttendance) return false;
+      if (workforceTaskStatus && row.taskStatus !== workforceTaskStatus) return false;
+      if (search && !`${row.employeeName} ${row.employeeCode} ${row.projectName || ""} ${row.taskTitle || ""}`.toLowerCase().includes(search)) return false;
+      return true;
+    });
+  }, [data.workforceStatus, workforceProjectId, workforceEmployeeId, workforceAttendance, workforceTaskStatus, workforceSearch]);
+
   if (loading) return (
     <div className="dash-loading">
       <div className="dash-spinner"></div>
@@ -107,6 +148,7 @@ export default function Dashboard() {
   const recentBreakHistory = data.recentBreakHistory || [];
   const selectedPeriodLabel = data.periodLabel || PERIOD_OPTIONS.find(option => option.value === period)?.label || "Today";
   const summaryProgress = data.progressSummary || { taskCount: 0, completedTasks: 0, averageProgress: 0 };
+  const workforceEmployeeOptions = [...new Map((data.workforceStatus || []).map(row => [row.employeeId, { id: row.employeeId, code: row.employeeCode, name: row.employeeName }])).values()];
 
   const cardData = [
     { key: 'employees', label: 'Employees', value: data.employees || 0, icon: ICONS.employees, color: '#1877F2' },
@@ -206,12 +248,12 @@ export default function Dashboard() {
             <span className="dash-insight-label">{item.code} · {item.name}</span>
             <span className="dash-insight-bar-bg"><span className="dash-insight-bar" style={{ width: `${item.progress}%`, background: item.progress >= 80 ? '#42B72A' : '#1877F2' }}></span></span>
             <span className="dash-insight-value">{item.progress}%</span>
-          </div>) : <p className="muted">No project activity found for this period.</p>}
+          </div>) : <p className="muted">No projects are configured yet.</p>}
         </div>
 
         <div className="dash-insight-box">
           <h4>Employee work progress</h4>
-          <p className="dash-section-note">Task progress grouped by assignee in the selected window.</p>
+          <p className="dash-section-note">Current task progress grouped dynamically by assignee.</p>
           {employeeProgress.length ? employeeProgress.map(item => <div className="dash-insight-row" key={item.id}>
             <span className="dash-insight-label">{item.name}</span>
             <span className="dash-insight-bar-bg"><span className="dash-insight-bar" style={{ width: `${item.progress}%`, background: item.progress >= 80 ? '#42B72A' : '#6C5CE7' }}></span></span>
@@ -222,20 +264,20 @@ export default function Dashboard() {
             <div className="dash-break-header">
               <div>
                 <h5>Break controls</h5>
-                <p className="dash-section-note">{currentAttendance ? `Check-in ${new Date(currentAttendance.checkIn).toLocaleTimeString()}` : "Check in from Attendance to enable break controls."}</p>
+                <p className="dash-section-note">{currentAttendance ? `Check-in ${new Date(currentAttendance.checkIn).toLocaleTimeString()}` : "Taking a break will capture your location and punch you in first."}</p>
               </div>
               {activeBreak ? <span className="status status-inactive">{activeBreak.breakType} break active</span> : <span className="status status-active">Ready</span>}
             </div>
-            {currentAttendance && !currentAttendance.checkOut && <div className="dash-break-actions">
+            {!activeBreak && <div className="dash-break-actions">
               <select className="dash-select" value={breakType} onChange={event => setBreakType(event.target.value)}>
                 <option value="TEA">TEA</option>
                 <option value="LUNCH">LUNCH</option>
                 <option value="PERSONAL">PERSONAL</option>
                 <option value="OTHER">OTHER</option>
               </select>
-              {activeBreak ? <button type="button" className="dash-btn" onClick={resumeWork}>Resume work</button> : <button type="button" className="dash-btn" onClick={startBreak}>Take break</button>}
+              <button type="button" className="dash-btn" disabled={breakSubmitting} onClick={startBreak}>{breakSubmitting ? "Locating..." : "Take break"}</button>
             </div>}
-            {!currentAttendance && <p className="muted">No open attendance record is available for your account yet.</p>}
+            {activeBreak && <div className="dash-break-actions"><button type="button" className="dash-btn" onClick={resumeWork}>Resume work</button></div>}
           </div>
 
           {data.onBreakEmployees?.length > 0 && <>
@@ -264,6 +306,51 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {Array.isArray(data.workforceStatus) && <section className="dash-workforce">
+        <div className="dash-workforce-header">
+          <div>
+            <h3>Employee work status</h3>
+            <p className="dash-section-note">Today&apos;s attendance, project allocation, task and live progress in one admin view.</p>
+          </div>
+          <span className="dash-chart-badge">{filteredWorkforce.length} records</span>
+        </div>
+        <div className="dash-workforce-filters">
+          <input value={workforceSearch} onChange={event => setWorkforceSearch(event.target.value)} placeholder="Search employee, project or task" aria-label="Search workforce" />
+          <select value={workforceProjectId} onChange={event => setWorkforceProjectId(event.target.value)}>
+            <option value="">All projects</option>
+            {projectOptions.map(option => <option key={option.id} value={option.id}>{option.code} - {option.name}</option>)}
+          </select>
+          <select value={workforceEmployeeId} onChange={event => setWorkforceEmployeeId(event.target.value)}>
+            <option value="">All employees</option>
+            {workforceEmployeeOptions.map(option => <option key={option.id} value={option.id}>{option.code} - {option.name}</option>)}
+          </select>
+          <select value={workforceAttendance} onChange={event => setWorkforceAttendance(event.target.value)}>
+            <option value="">All attendance</option>
+            <option value="ATTENDED">Present today</option>
+            <option value="PRESENT">Working now</option>
+            <option value="ON_BREAK">On break</option>
+            <option value="CHECKED_OUT">Checked out</option>
+            <option value="ABSENT">Absent</option>
+          </select>
+          <select value={workforceTaskStatus} onChange={event => setWorkforceTaskStatus(event.target.value)}>
+            <option value="">All task statuses</option>
+            {Object.entries(TASK_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select>
+        </div>
+        <div className="table-wrap dash-workforce-table"><table>
+          <thead><tr><th>Employee</th><th>Today</th><th>Punch time</th><th>Project</th><th>Assigned task</th><th>Task status</th><th>Progress</th></tr></thead>
+          <tbody>{filteredWorkforce.length ? filteredWorkforce.map(row => <tr key={`${row.employeeId}-${row.taskId || "unassigned"}`}>
+            <td><strong>{row.employeeName}</strong><small>{row.employeeCode}</small></td>
+            <td><span className={`status ${row.attendanceStatus === "ABSENT" ? "status-inactive" : "status-active"}`}>{ATTENDANCE_LABELS[row.attendanceStatus] || row.attendanceStatus}</span>{row.activeBreakType && <small>{row.activeBreakType} break</small>}</td>
+            <td>{row.checkIn ? <><span>In: {new Date(row.checkIn).toLocaleTimeString()}</span>{row.checkOut && <small>Out: {new Date(row.checkOut).toLocaleTimeString()}</small>}</> : "-"}</td>
+            <td>{row.projectName ? <><strong>{row.projectName}</strong><small>{row.projectCode}</small></> : "-"}</td>
+            <td>{row.taskTitle || "No task assigned"}</td>
+            <td>{TASK_LABELS[row.taskStatus] || row.taskStatus}</td>
+            <td><div className="dash-workforce-progress"><span><i style={{ width: `${row.taskProgress}%` }} /></span><strong>{row.taskProgress}%</strong></div></td>
+          </tr>) : <tr><td className="empty" colSpan="7">No employee records match these filters.</td></tr>}</tbody>
+        </table></div>
+      </section>}
 
       {/* Charts Section */}
       <div className="dash-charts">

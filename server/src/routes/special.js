@@ -1,10 +1,31 @@
 import { Router } from "express";
 import { Op } from "sequelize";
+import { sequelize } from "../config/database.js";
 import { Attendance, AttendanceBreak, AiInference, AssetRecord, AuditLog, Client, CommercialRecord, Employee, MarketingOpportunity, Office, ProcessingJob, Project, QcApproval, SecurityRegister, SpatialRecord, SurveyForm, SurveySubmission, Task, User } from "../models/registry.js";
 import { allow } from "../middleware/auth.js";
 import { recordAudit } from "../services/audit.js";
 
 const supervisoryRoles = ["ADMIN", "MANAGER", "HR"];
+const attendanceRoles = ["ADMIN", "MANAGER", "HR", "SURVEYOR", "EMPLOYEE", "MARKETING_EXECUTIVE", "MARKETING_MANAGER"];
+
+const currentWorkDate = () => new Date().toISOString().slice(0, 10);
+
+function detectedLocation(body) {
+  const latitude = Number(body.latitude);
+  const longitude = Number(body.longitude);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return null;
+  return {
+    latitude,
+    longitude,
+    locationAccuracy: Number.isFinite(Number(body.locationAccuracy)) ? Number(body.locationAccuracy) : null
+  };
+}
+
+function httpError(statusCode, message) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
 
 async function employeeForUser(userId) {
   return Employee.findOne({ where: { userId } });
@@ -35,7 +56,7 @@ dashboardRouter.get("/", async (req, res, next) => {
     const requestedProjectId = req.query.projectId ? String(req.query.projectId) : "";
     const taskWhere = period.start ? { [Op.or]: [{ createdAt: { [Op.gte]: period.start } }, { updatedAt: { [Op.gte]: period.start } }] } : {};
     const canSeeBreakHistory = supervisoryRoles.includes(req.user.role);
-    const [employees, offices, clients, projects, tasks, attendance, surveyForms, submissions, spatialRecords, processingJobs, assets, commercialRecords, approvals, aiRecords, securityRegisters, marketingOpportunities, activeBreakCount, recentActiveBreakRows, recentBreakHistoryRows, taskRows, employeeRecord] = await Promise.all([
+    const [employees, offices, clients, projects, tasks, attendance, surveyForms, submissions, spatialRecords, processingJobs, assets, commercialRecords, approvals, aiRecords, securityRegisters, marketingOpportunities, activeBreakCount, recentActiveBreakRows, recentBreakHistoryRows, projectRows, taskRows, periodTaskRows, workforceEmployees, todayAttendanceRows, employeeRecord] = await Promise.all([
       Employee.count(), Office.count(), Client.count(), Project.count(), Task.count(), Attendance.count(), SurveyForm.count(), SurveySubmission.count(),
       SpatialRecord.count(), ProcessingJob.count(), AssetRecord.count(), CommercialRecord.count(), QcApproval.count(), AiInference.count(), SecurityRegister.count(), MarketingOpportunity.count(),
       AttendanceBreak.count({ where: { resumedAt: null } }),
@@ -50,26 +71,49 @@ dashboardRouter.get("/", async (req, res, next) => {
         order: [["startedAt", "DESC"]],
         limit: 20
       }) : Promise.resolve([]),
+      Project.findAll({ attributes: ["id", "code", "name", "status"], order: [["name", "ASC"]] }),
       Task.findAll({
-        where: taskWhere,
         include: [
           { model: Project, attributes: ["id", "code", "name", "status"] },
           { model: User, as: "assignee", attributes: ["id", "name"] }
         ],
         order: [["updatedAt", "DESC"]]
       }),
+      Task.findAll({ where: taskWhere, attributes: ["status", "progress"] }),
+      req.user.role === "ADMIN" ? Employee.findAll({
+        include: [{ model: User, attributes: ["id", "name", "email", "active"] }],
+        order: [["firstName", "ASC"], ["lastName", "ASC"]]
+      }) : Promise.resolve([]),
+      req.user.role === "ADMIN" ? Attendance.findAll({
+        where: { workDate: currentWorkDate() },
+        include: [{ model: AttendanceBreak, as: "breaks" }],
+        order: [["checkIn", "ASC"]]
+      }) : Promise.resolve([]),
       employeeForUser(req.user.id)
     ]);
 
     const projectProgressMap = new Map();
     const employeeProgressMap = new Map();
-    let totalTaskProgress = 0;
-    let completedTasks = 0;
+    const totalTaskProgress = periodTaskRows.reduce((sum, task) => sum + Number(task.progress || 0), 0);
+    const completedTasks = periodTaskRows.filter(task => task.status === "DONE").length;
+
+    // Seed every project so an admin always gets one independently calculated
+    // progress bar, including projects that do not have tasks in this period yet.
+    for (const project of projectRows) {
+      projectProgressMap.set(project.id, {
+        id: project.id,
+        code: project.code,
+        name: project.name,
+        status: project.status,
+        totalTasks: 0,
+        completedTasks: 0,
+        progressTotal: 0,
+        lastUpdatedAt: null
+      });
+    }
 
     for (const task of taskRows) {
       const progressValue = Number(task.progress || 0);
-      totalTaskProgress += progressValue;
-      if (task.status === "DONE") completedTasks += 1;
 
       const project = task.Project;
       const projectKey = project?.id || task.ProjectId || "unassigned-project";
@@ -124,7 +168,7 @@ dashboardRouter.get("/", async (req, res, next) => {
 
     const openAttendance = employeeRecord
       ? await Attendance.findOne({
-          where: { employeeId: employeeRecord.id, checkOut: null },
+          where: { employeeId: employeeRecord.id, workDate: currentWorkDate(), checkOut: null },
           include: [
             { model: Employee, attributes: ["id", "employeeCode", "firstName", "lastName"] },
             { model: AttendanceBreak, as: "breaks", order: [["startedAt", "ASC"]] }
@@ -158,6 +202,46 @@ dashboardRouter.get("/", async (req, res, next) => {
     const selectedProjectProgress = projectProgress.find(item => item.id === requestedProjectId) || projectProgress[0] || null;
     const projectOptions = projectProgress.map(item => ({ id: item.id, code: item.code, name: item.name, status: item.status }));
     const recentBreakHistory = recentBreakHistoryRows.map(formatBreakRow);
+    const workforceStatus = req.user.role === "ADMIN" ? (() => {
+      const attendanceByEmployee = new Map(todayAttendanceRows.map(row => [row.employeeId, row]));
+      const tasksByAssignee = new Map();
+      for (const task of taskRows) {
+        if (!task.assigneeId) continue;
+        if (!tasksByAssignee.has(task.assigneeId)) tasksByAssignee.set(task.assigneeId, []);
+        tasksByAssignee.get(task.assigneeId).push(task);
+      }
+
+      return workforceEmployees.flatMap(employee => {
+        const todayAttendance = attendanceByEmployee.get(employee.id);
+        const activeBreak = todayAttendance?.breaks?.find(entry => !entry.resumedAt);
+        const attendanceStatus = !todayAttendance ? "ABSENT" : activeBreak ? "ON_BREAK" : todayAttendance.checkOut ? "CHECKED_OUT" : "PRESENT";
+        const employeeTasks = employee.userId ? tasksByAssignee.get(employee.userId) || [] : [];
+        const base = {
+          employeeId: employee.id,
+          employeeCode: employee.employeeCode,
+          employeeName: `${employee.firstName} ${employee.lastName || ""}`.trim(),
+          userId: employee.userId || null,
+          attendanceStatus,
+          attendanceId: todayAttendance?.id || null,
+          checkIn: todayAttendance?.checkIn || null,
+          checkOut: todayAttendance?.checkOut || null,
+          latitude: todayAttendance?.latitude || null,
+          longitude: todayAttendance?.longitude || null,
+          activeBreakType: activeBreak?.breakType || null
+        };
+        if (!employeeTasks.length) return [{ ...base, taskId: null, taskTitle: null, taskStatus: "UNASSIGNED", taskProgress: 0, projectId: null, projectCode: null, projectName: null }];
+        return employeeTasks.map(task => ({
+          ...base,
+          taskId: task.id,
+          taskTitle: task.title,
+          taskStatus: task.status,
+          taskProgress: Number(task.progress || 0),
+          projectId: task.Project?.id || task.ProjectId || null,
+          projectCode: task.Project?.code || null,
+          projectName: task.Project?.name || "Unassigned project"
+        }));
+      });
+    })() : undefined;
 
     res.json({
       employees, offices, clients, projects, tasks, attendance, surveyForms, submissions, spatialRecords, processingJobs, assets, commercialRecords, approvals, aiRecords, securityRegisters, marketingOpportunities,
@@ -167,14 +251,15 @@ dashboardRouter.get("/", async (req, res, next) => {
       periodLabel: period.label,
       projectId: selectedProjectProgress?.id || "",
       progressSummary: {
-        taskCount: taskRows.length,
+        taskCount: periodTaskRows.length,
         completedTasks,
-        averageProgress: taskRows.length ? Math.round(totalTaskProgress / taskRows.length) : 0
+        averageProgress: periodTaskRows.length ? Math.round(totalTaskProgress / periodTaskRows.length) : 0
       },
       projectOptions,
       selectedProjectProgress,
       projectProgress,
       employeeProgress,
+      workforceStatus,
       recentBreakHistory,
       myAttendance
     });
@@ -254,7 +339,7 @@ attendanceRouter.get("/", async (req, res, next) => {
     res.json(await Attendance.findAll({ where, include: [{ model: Employee }, { model: AttendanceBreak, as: "breaks", order: [["startedAt", "ASC"]] }], order: [["workDate", "DESC"], ["checkIn", "DESC"]] }));
   } catch (e) { next(e); }
 });
-attendanceRouter.post("/", allow("ADMIN", "MANAGER", "HR", "SURVEYOR", "EMPLOYEE", "MARKETING_EXECUTIVE", "MARKETING_MANAGER"), async (req, res, next) => {
+attendanceRouter.post("/", allow(...attendanceRoles), async (req, res, next) => {
   try {
     const ownEmployee = await employeeForUser(req.user.id);
     const requestedEmployeeId = supervisoryRoles.includes(req.user.role) ? req.body.employeeId : null;
@@ -262,18 +347,16 @@ attendanceRouter.post("/", allow("ADMIN", "MANAGER", "HR", "SURVEYOR", "EMPLOYEE
     if (!employeeId) return res.status(400).json({ message: "Your user account is not linked to an employee record" });
     const employee = requestedEmployeeId ? await Employee.findByPk(requestedEmployeeId) : ownEmployee;
     if (!employee) return res.status(400).json({ message: "Employee record not found" });
-    const workDate = req.body.workDate || new Date().toISOString().slice(0, 10);
-    const latitude = Number(req.body.latitude), longitude = Number(req.body.longitude);
-    if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+    const workDate = req.body.workDate || currentWorkDate();
+    const location = detectedLocation(req.body);
+    if (!location) {
       return res.status(400).json({ message: "A valid automatically detected location is required for check-in" });
     }
     const defaults = {
       employeeId,
       workDate,
       checkIn: req.body.checkIn || new Date(),
-      latitude,
-      longitude,
-      locationAccuracy: Number.isFinite(Number(req.body.locationAccuracy)) ? Number(req.body.locationAccuracy) : null,
+      ...location,
       notes: req.body.notes || null
     };
     const [row, created] = await Attendance.findOrCreate({
@@ -282,6 +365,58 @@ attendanceRouter.post("/", allow("ADMIN", "MANAGER", "HR", "SURVEYOR", "EMPLOYEE
     });
     if (created) await recordAudit(req, "CREATE", "Attendance", row.id, { after: row });
     res.status(created ? 201 : 200).json(row);
+  } catch (e) { next(e); }
+});
+
+// Starts a break and, when needed, creates today's location-backed punch first.
+// The attendance row is locked in the transaction so concurrent clicks cannot
+// create duplicate punches or more than one active break.
+attendanceRouter.post("/breaks/start", allow(...attendanceRoles), async (req, res, next) => {
+  try {
+    const ownEmployee = await employeeForUser(req.user.id);
+    const requestedEmployeeId = supervisoryRoles.includes(req.user.role) ? req.body.employeeId : null;
+    const employeeId = requestedEmployeeId || ownEmployee?.id;
+    if (!employeeId) return res.status(400).json({ message: "Your user account is not linked to an employee record" });
+    const employee = requestedEmployeeId ? await Employee.findByPk(requestedEmployeeId) : ownEmployee;
+    if (!employee) return res.status(400).json({ message: "Employee record not found" });
+
+    const result = await sequelize.transaction(async transaction => {
+      const workDate = currentWorkDate();
+      let attendance = await Attendance.findOne({ where: { employeeId, workDate }, transaction });
+      let attendanceCreated = false;
+
+      if (!attendance) {
+        const location = detectedLocation(req.body);
+        if (!location) throw httpError(400, "Current location is required to punch in before starting a break");
+        [attendance, attendanceCreated] = await Attendance.findOrCreate({
+          where: { employeeId, workDate },
+          defaults: {
+            employeeId,
+            workDate,
+            checkIn: new Date(),
+            ...location,
+            notes: req.body.notes || null
+          },
+          transaction
+        });
+        if (attendanceCreated) await recordAudit(req, "CREATE", "Attendance", attendance.id, { after: attendance }, { transaction });
+      }
+
+      attendance = await Attendance.findByPk(attendance.id, { transaction, lock: transaction.LOCK.UPDATE });
+
+      if (attendance.checkOut) throw httpError(409, "Today's attendance is already checked out; another punch is not allowed");
+      if (await AttendanceBreak.findOne({ where: { attendanceId: attendance.id, resumedAt: null }, transaction })) {
+        throw httpError(409, "A break is already active");
+      }
+
+      const allowed = ["TEA", "LUNCH", "PERSONAL", "OTHER"];
+      const breakType = allowed.includes(req.body.breakType) ? req.body.breakType : "TEA";
+      const entry = await AttendanceBreak.create({ attendanceId: attendance.id, breakType, notes: req.body.notes || null, startedAt: new Date() }, { transaction });
+      await recordAudit(req, "CREATE", "AttendanceBreak", entry.id, { after: entry }, { transaction });
+      return { attendance, break: entry, attendanceCreated };
+    });
+
+    res.status(result.attendanceCreated ? 201 : 200).json(result);
   } catch (e) { next(e); }
 });
 attendanceRouter.patch("/:id/checkout", async (req, res, next) => {

@@ -105,6 +105,26 @@ export default function Attendance({ currentUser }) {
     finally { setSubmitting(false); }
   };
 
+  const punchInAndStartBreak = async () => {
+    if (submitting || todayAttendance || (canChooseEmployee && !employeeId)) return;
+    setSubmitting(true);
+    setError("");
+    setMessage("Detecting current location...");
+    try {
+      const location = await locate();
+      const result = await api("/attendance/breaks/start", {
+        method: "POST",
+        body: JSON.stringify({ ...(employeeId ? { employeeId } : {}), ...location, notes, breakType })
+      });
+      setNotes("");
+      setMessage(result.attendanceCreated
+        ? `Punch-in recorded with location and ${breakType.toLowerCase()} break started`
+        : `${breakType.toLowerCase()} break started`);
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setSubmitting(false); }
+  };
+
   const checkOut = async id => {
     setError("");
     setMessage("");
@@ -149,7 +169,8 @@ export default function Attendance({ currentUser }) {
       </select></label>}
       <label>Work notes<input value={notes} onChange={event => setNotes(event.target.value)} placeholder="Today's planned field work"/></label>
       <div className="actions">
-        <button disabled={Boolean(todayAttendance) || submitting}>{submitting ? "Locating & recording..." : "Check in "}</button>
+        <button type="submit" disabled={Boolean(todayAttendance) || submitting}>{submitting ? "Locating & recording..." : "Check in"}</button>
+        {!todayAttendance && <button type="button" disabled={submitting || (canChooseEmployee && !employeeId)} onClick={punchInAndStartBreak}>Punch in & take break</button>}
       </div>
     </form>
     {todayAttendance && <p className="muted">Today&apos;s attendance is already recorded. Use the open row below to check out.</p>}
