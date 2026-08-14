@@ -1,11 +1,96 @@
 import { useEffect, useMemo, useState } from "react";
+import {
+  ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, CartesianGrid,
+  PieChart, Pie, Cell
+} from "recharts";
 import { api } from "../services/api";
 import "../marketing.css";
 
 const initial = { title: "", clientName: "", contactPerson: "", enquiryNumber: "", source: "OTHER", sourceLink: "", scope: "", location: "", service: "", estimatedValue: "", submissionDeadline: "", emdAmount: "", tenderFee: "", eligibilityCriteria: "", assignedExecutiveId: "" };
 const money = value => Number(value || 0).toLocaleString("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 });
+const compactMoney = value => {
+  const n = Number(value || 0);
+  if (n >= 1e7) return `₹${(n / 1e7).toFixed(2)} Cr`;
+  if (n >= 1e5) return `₹${(n / 1e5).toFixed(2)} L`;
+  if (n >= 1e3) return `₹${(n / 1e3).toFixed(1)}K`;
+  return `₹${n}`;
+};
 const label = value => String(value || "-").replaceAll("_", " ");
 const sources = ["GEM", "CPPP", "EPROCURE", "PRIVATE_ENQUIRY", "EXISTING_CLIENT", "EMAIL", "WEBSITE", "LINKEDIN", "PARTNER", "OTHER"];
+
+// Professional teal/green brand palette for charts
+const PIE_COLORS = ["#0d9e7c", "#d4a63d", "#1877f2", "#7c5ce7", "#e74c3c", "#1da1f2", "#42b72a", "#e1306c", "#8b9dc3", "#f39c12", "#2c3e50", "#16a085", "#c0392b", "#f7b928", "#95a5a6"];
+
+const STATUS_TONE = {
+  NEW: ["#e7f3ff", "#166fe5"],
+  SCREENING: ["#e7f3ff", "#166fe5"],
+  MANAGER_REVIEW: ["#fff4d6", "#9a6b00"],
+  ADMIN_REVIEW: ["#fff4d6", "#9a6b00"],
+  BID_APPROVED: ["#efeaff", "#6c3df2"],
+  BID_PREPARATION: ["#efeaff", "#6c3df2"],
+  SUBMITTED: ["#def0e6", "#0d694e"],
+  TECHNICAL_EVALUATION: ["#def0e6", "#0d694e"],
+  QUALIFIED: ["#def0e6", "#0d694e"],
+  FINANCIAL_EVALUATION: ["#def0e6", "#0d694e"],
+  NEGOTIATION: ["#def0e6", "#0d694e"],
+  AWARDED: ["#d9f6e7", "#0b8a4e"],
+  LOST: ["#fee8e8", "#c0392b"],
+  NO_BID: ["#fee8e8", "#c0392b"],
+  HOLD: ["#eef1f4", "#5b6770"]
+};
+const tone = status => STATUS_TONE[status] || ["#e1ebe7", "#17453f"];
+
+const STAGE_ORDER = ["NEW", "SCREENING", "MANAGER_REVIEW", "ADMIN_REVIEW", "BID_APPROVED", "BID_PREPARATION", "SUBMITTED", "TECHNICAL_EVALUATION", "QUALIFIED", "FINANCIAL_EVALUATION", "NEGOTIATION", "AWARDED", "LOST", "NO_BID", "HOLD"];
+
+const METRICS = (summary) => [
+  { label: "Active pipeline", value: summary.active ?? 0, icon: "📌", tone: "#0d9e7c" },
+  { label: "Pipeline value", value: compactMoney(summary.pipelineValue), icon: "💰", tone: "#1877f2" },
+  { label: "Bid preparation", value: summary.bidsInPreparation ?? 0, icon: "📝", tone: "#7c5ce7" },
+  { label: "Submitted", value: summary.submitted ?? 0, icon: "📤", tone: "#16a085" },
+  { label: "Awarded", value: summary.awarded ?? 0, icon: "🏆", tone: "#0b8a4e" },
+  { label: "Win rate", value: `${summary.winPercentage || 0}%`, icon: "🎯", tone: "#f39c12" },
+  { label: "Manager pending", value: summary.managerPending ?? 0, icon: "🗂️", tone: "#e1306c" },
+  { label: "Admin pending", value: summary.adminPending ?? 0, icon: "🏛️", tone: "#c0392b" },
+  { label: "Deadlines (7d)", value: summary.upcomingDeadlines ?? 0, icon: "⏰", tone: "#f7b928" },
+  { label: "Overdue follow-ups", value: summary.overdueFollowUps ?? 0, icon: "🔔", tone: "#e67e22" }
+];
+
+// Role hierarchy — who does what & who reports to whom
+const ROLES = [
+  {
+    name: "Admin (GeoMark)",
+    icon: "🏛️",
+    color: "#7c5ce7",
+    reportsTo: null,
+    duties: ["Final Go / No-Go approval", "Approves bid preparation", "Converts awarded bid into a project"]
+  },
+  {
+    name: "Marketing Manager / Manager",
+    icon: "🗂️",
+    color: "#0d9e7c",
+    reportsTo: "Admin",
+    duties: ["Reviews screening → recommend GO / NO-BID", "Prepares BOQ & costing", "Records bid submission & post-bid result"]
+  },
+  {
+    name: "Marketing Executive",
+    icon: "👤",
+    color: "#166fe5",
+    reportsTo: "Marketing Manager",
+    duties: ["Registers tenders / enquiries", "Initial screening & bid recommendation", "Client follow-up + CRM activities"]
+  }
+];
+
+// Detailed end-to-end process — who acts at every step
+const DETAILED_STEPS = [
+  { n: 1, icon: "📥", title: "Intake / Create", statuses: ["NEW"], who: "Marketing Executive", action: "Tender / enquiry registered with client, scope, estimated value & deadline.", note: "Start of pipeline" },
+  { n: 2, icon: "🔍", title: "Executive Screening", statuses: ["SCREENING"], who: "Marketing Executive", action: "Suitability check → recommend BID, NO-BID, MORE INFO or HOLD.", note: "Sends to Manager" },
+  { n: 3, icon: "🗂️", title: "Manager Review", statuses: ["MANAGER_REVIEW"], who: "Marketing Manager", action: "Validates screening → RECOMMEND_GO, NO-BID, RETURN or HOLD.", note: "Sends to Admin" },
+  { n: 4, icon: "🏛️", title: "Admin Go / No-Go", statuses: ["ADMIN_REVIEW"], who: "Admin", action: "Final decision → GO_FOR_BID, NO_BID, APPROVE_WITH_CONDITIONS or HOLD.", note: "Gate before bidding" },
+  { n: 5, icon: "📝", title: "Bid Preparation & Costing", statuses: ["BID_APPROVED", "BID_PREPARATION"], who: "Marketing Manager", action: "BOQ / costing — manpower, equipment, EMD/BG, overhead, profit & tax.", note: "Build the bid" },
+  { n: 6, icon: "📤", title: "Bid Submission", statuses: ["SUBMITTED"], who: "Marketing Manager", action: "Portal, bid reference & final quoted value recorded — bid locks.", note: "Bid locked" },
+  { n: 7, icon: "🔎", title: "Post-Bid Evaluation", statuses: ["TECHNICAL_EVALUATION", "QUALIFIED", "FINANCIAL_EVALUATION", "NEGOTIATION"], who: "Marketing Manager", action: "Track technical pass → qualified → financial evaluation → negotiation.", note: "Outcome pending" },
+  { n: 8, icon: "🏆", title: "Award & Outcome", statuses: ["AWARDED", "LOST", "NO_BID"], who: "Admin", action: "AWARDED bid converts into a project; LOST / NO-BID closes the loop.", note: "End of pipeline" }
+];
 
 export default function Marketing({ currentUser }) {
   const [summary, setSummary] = useState({}); const [rows, setRows] = useState([]); const [team, setTeam] = useState([]);
@@ -21,11 +106,121 @@ export default function Marketing({ currentUser }) {
   const run = async (path, options, success) => { setError(""); setMessage(""); try { await api(path, options); setNotes(""); setMessage(success); await load(); } catch (e) { setError(e.message); } };
   const field = (key, value) => setForm(current => ({ ...current, [key]: value }));
 
+  // Derived chart data (from the loaded opportunity list)
+  const stageBuckets = useMemo(() => {
+    const buckets = {};
+    rows.forEach(row => { (buckets[row.status] = buckets[row.status] || []).push(row); });
+    return STAGE_ORDER.filter(s => buckets[s]).map(s => ({
+      name: label(s),
+      short: label(s).split(" ")[0],
+      count: buckets[s].length,
+      value: buckets[s].reduce((sum, r) => sum + Number(r.estimatedValue || 0), 0)
+    }));
+  }, [rows]);
+
+  const sourceBuckets = useMemo(() => {
+    const buckets = {};
+    rows.forEach(row => { buckets[row.source || "OTHER"] = (buckets[row.source || "OTHER"] || 0) + 1; });
+    return Object.entries(buckets).map(([name, count]) => ({ name: label(name), count })).sort((a, b) => b.count - a.count);
+  }, [rows]);
+
+  const barData = stageBuckets.map(b => ({ ...b, valueCr: +(b.value / 1e7).toFixed(2) }));
+
   return <section className="marketing-page">
-    <div className="page-head"><div><span className="eyebrow">Lead to project</span><h2>Marketing</h2></div><span className="count">{summary.active || 0} active</span></div>
-    <p className="muted">Search opportunities, bid through Executive → Manager → Admin approval, follow up, and convert awards into projects.</p>
+    <div className="mk-header">
+      <div>
+        <span className="mk-eyebrow">Lead to project · CRM pipeline</span>
+        <h2 className="mk-title">Marketing Dashboard</h2>
+        <p className="mk-sub">Track tenders from enquiry → bid → award, manage approvals and convert wins into projects.</p>
+      </div>
+      <div className="mk-header-right">
+        <span className="mk-pill"><b>{summary.active || 0}</b> active opportunities</span>
+        <button className="mk-add-btn" onClick={e => { const d = e.currentTarget.closest("section").querySelector("details"); d.open = !d.open; }}>＋ Add tender</button>
+      </div>
+    </div>
     {error && <p className="error">{error}</p>}{message && <p className="success">{message}</p>}
-    <div className="cards marketing-stats">{[["Active pipeline", summary.active], ["Pipeline value", money(summary.pipelineValue)], ["Manager pending", summary.managerPending], ["Admin pending", summary.adminPending], ["Bid preparation", summary.bidsInPreparation], ["Submitted", summary.submitted], ["Awarded", summary.awarded], ["Win rate", `${summary.winPercentage || 0}%`], ["Deadlines (7 days)", summary.upcomingDeadlines], ["Overdue follow-ups", summary.overdueFollowUps]].map(([name, value]) => <div className="card" key={name}><strong className="small">{value ?? 0}</strong><span>{name}</span></div>)}</div>
+
+    {/* KPI cards */}
+    <div className="mk-kpis">
+      {METRICS(summary).map(({ label: l, value, icon, tone: t }) => (
+        <div className="mk-kpi" key={l}>
+          <span className="mk-kpi-icon" style={{ background: `${t}1a`, color: t }}>{icon}</span>
+          <span className="mk-kpi-value" style={{ color: t }}>{value ?? 0}</span>
+          <span className="mk-kpi-label">{l}</span>
+        </div>
+      ))}
+    </div>
+
+    {/* Workflow — detailed marketing model */}
+    <div className="mk-workflow">
+      <div className="mk-workflow-head">
+        <span>🔄 Marketing model — roles, workflow & reporting</span>
+        <span className="mk-chart-badge">end-to-end lifecycle</span>
+      </div>
+
+      {/* Role hierarchy & reporting */}
+      <div className="mk-role-section">
+        <h4 className="mk-section-title">👥 Roles · responsibilities · reporting line</h4>
+        <div className="mk-org">
+          <div className="mk-org-col">
+            {ROLES.map(role => (
+              <div className="mk-role" key={role.name} style={{ borderTopColor: role.color }}>
+                <div className="mk-role-top">
+                  <span className="mk-role-icon" style={{ background: `${role.color}1a`, color: role.color }}>{role.icon}</span>
+                  <div className="mk-flow-text">
+                    <b style={{ color: role.color }}>{role.name}</b>
+                    <small className="mk-role-report">↳ Reports to: {role.reportsTo || <b>— (top authority)</b>}</small>
+                  </div>
+                </div>
+                <ul className="mk-role-duties">
+                  {role.duties.map(d => <li key={d}>{d}</li>)}
+                </ul>
+              </div>
+            ))}
+          </div>
+          <div className="mk-org-chain">
+            <span className="mk-chain-box" style={{ borderColor: ROLES[0].color, color: ROLES[0].color }}>🏛️ ADMIN <small>final authority</small></span>
+            <span className="mk-chain-link">⬇ reports to</span>
+            <span className="mk-chain-box" style={{ borderColor: ROLES[1].color, color: ROLES[1].color }}>🗂️ MANAGERS <small>review + bid</small></span>
+            <span className="mk-chain-link">⬇ reports to</span>
+            <span className="mk-chain-box" style={{ borderColor: ROLES[2].color, color: ROLES[2].color }}>👤 EXECUTIVES <small>intake + screening</small></span>
+          </div>
+        </div>
+      </div>
+
+      {/* Detailed process timeline */}
+      <div className="mk-step-section">
+        <h4 className="mk-section-title">🪜 Detailed process — every step, who acts & live count</h4>
+        <div className="mk-timeline">
+          {DETAILED_STEPS.map(step => {
+            const count = step.statuses.reduce((s, st) => s + (stageBuckets.find(b => b.name === label(st))?.count || 0), 0);
+            return (
+              <div className="mk-step" key={step.title}>
+                <span className="mk-step-num" style={{ background: tone(step.statuses[0])[1], color: "#fff" }}>{step.n}</span>
+                <div className="mk-step-body">
+                  <div className="mk-step-head">
+                    <span className="mk-flow-icon" style={{ background: tone(step.statuses[0])[0], color: tone(step.statuses[0])[1] }}>{step.icon}</span>
+                    <div className="mk-flow-text">
+                      <b>{step.title}</b>
+                      <small>{step.statuses.map(label).join(" · ")}</small>
+                    </div>
+                    {count > 0 && <span className="mk-flow-count" style={{ background: tone(step.statuses[0])[0], color: tone(step.statuses[0])[1] }}>{count}</span>}
+                    <span className="mk-step-arrow">↓</span>
+                  </div>
+                  <div className="mk-step-meta">
+                    <span className="mk-who" style={{ borderColor: step.n <= 2 ? "#166fe5" : step.n === 8 ? "#7c5ce7" : "#0d9e7c" }}>👤 {step.who} acts here</span>
+                    <span className="mk-action">{step.action}</span>
+                    <span className="mk-decision" style={{ color: tone(step.statuses[0])[1] }}>{step.note}</span>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <p className="mk-flow-note">Any opportunity can branch to <b style={{ color: tone("HOLD")[1] }}>⏸️ HOLD</b> (paused) from any review stage, or become <b style={{ color: tone("LOST")[1] }}>🚫 LOST / NO-BID</b> after evaluation. Only an <b style={{ color: tone("AWARDED")[1] }}>🏆 AWARDED</b> bid is converted by the Admin into a project.</p>
+    </div>
 
     <details className="marketing-panel"><summary>Add opportunity / tender</summary><form className="form-grid" onSubmit={async e => { e.preventDefault(); await run("/marketing/opportunities", { method: "POST", body: JSON.stringify(form) }, "Opportunity registered"); setForm(initial); }}>
       <label>Work title<input required value={form.title} onChange={e => field("title", e.target.value)}/></label><label>Client<input required value={form.clientName} onChange={e => field("clientName", e.target.value)}/></label>
@@ -39,9 +234,9 @@ export default function Marketing({ currentUser }) {
     </form></details>
 
     <div className="pipeline-toolbar"><input placeholder="Search client, tender, location or service" value={query} onChange={e => setQuery(e.target.value)}/><button onClick={() => load()}>Search</button><button className="secondary" onClick={() => { setQuery(""); load(""); }}>Clear</button></div>
-    <div className="marketing-layout"><div className="table-wrap"><table><thead><tr><th>Opportunity</th><th>Client</th><th>Deadline</th><th>Value</th><th>Owner</th><th>Status</th></tr></thead><tbody>{rows.length ? rows.map(row => <tr className={selectedId === row.id ? "selected-row" : ""} key={row.id} onClick={() => setSelectedId(row.id)}><td>{row.title}<small className="block">{row.enquiryNumber || row.source}</small></td><td>{row.clientName}</td><td>{row.submissionDeadline ? new Date(row.submissionDeadline).toLocaleString() : "-"}</td><td>{money(row.estimatedValue)}</td><td>{row.assignedExecutive?.name || "Unassigned"}</td><td><span className="status">{label(row.status)}</span></td></tr>) : <tr><td className="empty" colSpan="6">No matching opportunity.</td></tr>}</tbody></table></div>
+    <div className="marketing-layout"><div className="table-wrap"><table><thead><tr><th>Opportunity</th><th>Client</th><th>Deadline</th><th>Value</th><th>Owner</th><th>Status</th></tr></thead><tbody>{rows.length ? rows.map(row => <tr className={selectedId === row.id ? "selected-row" : ""} key={row.id} onClick={() => setSelectedId(row.id)}><td>{row.title}<small className="block">{row.enquiryNumber || row.source}</small></td><td>{row.clientName}</td><td>{row.submissionDeadline ? new Date(row.submissionDeadline).toLocaleString() : "-"}</td><td>{money(row.estimatedValue)}</td><td>{row.assignedExecutive?.name || "Unassigned"}</td><td><span className="status" style={{ background: tone(row.status)[0], color: tone(row.status)[1] }}>{label(row.status)}</span></td></tr>) : <tr><td className="empty" colSpan="6">No matching opportunity.</td></tr>}</tbody></table></div>
 
-      <aside className="opportunity-detail">{selected ? <><span className="eyebrow">Selected opportunity</span><h3>{selected.title}</h3><p>{selected.scope || "No scope entered"}</p><p className="muted">{selected.clientName} · {selected.location || "Location pending"}</p><div className="detail-grid"><span>Status <b>{label(selected.status)}</b></span><span>EMD <b>{money(selected.emdAmount)}</b></span><span>Quoted <b>{money(selected.quotedValue)}</b></span><span>Follow-up <b>{selected.nextFollowUpAt ? new Date(selected.nextFollowUpAt).toLocaleString() : "-"}</b></span></div>
+      <aside className="opportunity-detail">{selected ? <><span className="eyebrow">Selected opportunity</span><h3>{selected.title}</h3><p>{selected.scope || "No scope entered"}</p><p className="muted">{selected.clientName} · {selected.location || "Location pending"}</p><div className="detail-grid"><span>Status <b style={{ color: tone(selected.status)[1] }}>{label(selected.status)}</b></span><span>EMD <b>{money(selected.emdAmount)}</b></span><span>Quoted <b>{money(selected.quotedValue)}</b></span><span>Follow-up <b>{selected.nextFollowUpAt ? new Date(selected.nextFollowUpAt).toLocaleString() : "-"}</b></span></div>
         {["NEW", "SCREENING"].includes(selected.status) && ["ADMIN", "MARKETING_EXECUTIVE", "MARKETING_MANAGER"].includes(currentUser.role) && <Workflow title="Executive screening" options={["BID_RECOMMENDED", "NO_BID_RECOMMENDED", "MORE_INFORMATION_REQUIRED", "HOLD"]} value={screening} setValue={setScreening} notes={notes} setNotes={setNotes} button="Send to manager" onClick={() => run(`/marketing/opportunities/${selected.id}/screen`, { method: "PATCH", body: JSON.stringify({ recommendation: screening, notes }) }, "Sent to Marketing Manager")}/>} 
         {selected.status === "MANAGER_REVIEW" && canManage && <Workflow title="Marketing Manager review" options={["RECOMMEND_GO", "RECOMMEND_NO_BID", "RETURN_TO_EXECUTIVE", "HOLD"]} value={managerDecision} setValue={setManagerDecision} notes={notes} setNotes={setNotes} button="Submit review" onClick={() => run(`/marketing/opportunities/${selected.id}/manager-review`, { method: "PATCH", body: JSON.stringify({ decision: managerDecision, notes }) }, "Manager decision recorded")}/>} 
         {selected.status === "ADMIN_REVIEW" && currentUser.role === "ADMIN" && <Workflow title="Admin Go / No-Go" options={["GO_FOR_BID", "NO_BID", "HOLD", "APPROVE_WITH_CONDITIONS", "RETURN_TO_MANAGER"]} value={adminDecision} setValue={setAdminDecision} notes={notes} setNotes={setNotes} button="Confirm decision" onClick={() => run(`/marketing/opportunities/${selected.id}/admin-decision`, { method: "PATCH", body: JSON.stringify({ decision: adminDecision, notes }) }, "Admin decision recorded")}/>} 
@@ -52,6 +247,36 @@ export default function Marketing({ currentUser }) {
         <form className="workflow-box" onSubmit={async e => { e.preventDefault(); await run(`/marketing/opportunities/${selected.id}/activities`, { method: "POST", body: JSON.stringify(activity) }, "Activity recorded"); setActivity({ activityType: "FOLLOW_UP", details: "", nextFollowUpAt: "" }); }}><h4>CRM activity / follow-up</h4><select value={activity.activityType} onChange={e => setActivity({ ...activity, activityType: e.target.value })}>{["CALL", "EMAIL", "MEETING", "FOLLOW_UP", "CLARIFICATION", "PRESENTATION", "NEGOTIATION", "NOTE"].map(x => <option key={x}>{x}</option>)}</select><textarea required placeholder="Activity details" value={activity.details} onChange={e => setActivity({ ...activity, details: e.target.value })}/><label>Next follow-up<input type="datetime-local" value={activity.nextFollowUpAt} onChange={e => setActivity({ ...activity, nextFollowUpAt: e.target.value })}/></label><button>Add activity</button>{selected.activities?.slice().reverse().map(item => <p key={item.id}><b>{label(item.activityType)}</b> · {new Date(item.occurredAt).toLocaleString()}<br/><small>{item.details}</small></p>)}</form>
       </> : <p className="muted">Select an opportunity to review its workflow, costing, submission and follow-ups.</p>}</aside>
     </div>
+
+    {/* Charts — at the bottom */}
+    {rows.length > 0 && (
+      <div className="mk-charts">
+        <div className="mk-chart-box">
+          <div className="mk-chart-head"><span>💹 Pipeline value by stage</span><span className="mk-chart-badge">₹ in Cr</span></div>
+          <ResponsiveContainer width="100%" height={260}>
+            <BarChart data={barData} margin={{ top: 8, right: 12, left: 0, bottom: 4 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e8eeec" vertical={false} />
+              <XAxis dataKey="short" tick={{ fill: "#5b6770", fontSize: 11 }} interval={0} angle={-20} textAnchor="end" height={46} />
+              <YAxis tick={{ fill: "#5b6770", fontSize: 11 }} />
+              <Tooltip formatter={value => [`₹${value} Cr`, "Pipeline value"]} contentStyle={{ borderRadius: 10, border: "none", boxShadow: "0 6px 24px rgba(0,0,0,0.12)" }} />
+              <Bar dataKey="valueCr" fill="#0d9e7c" radius={[6, 6, 0, 0]} maxBarSize={46} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+        <div className="mk-chart-box">
+          <div className="mk-chart-head"><span>🥧 Opportunities by source</span><span className="mk-chart-badge">{rows.length} total</span></div>
+          <ResponsiveContainer width="100%" height={260}>
+            <PieChart>
+              <Pie data={sourceBuckets} dataKey="count" nameKey="name" cx="50%" cy="50%" innerRadius={58} outerRadius={92} paddingAngle={2}>
+                {sourceBuckets.map((entry, i) => <Cell key={entry.name} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
+              </Pie>
+              <Tooltip contentStyle={{ borderRadius: 10, border: "none", boxShadow: "0 6px 24px rgba(0,0,0,0.12)" }} />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+    )}
   </section>;
 }
 

@@ -15,6 +15,7 @@ import Attendance from "./Attendance";
 import SurveySubmissions from "./SurveySubmissions";
 import Tasks from "./Tasks";
 import Marketing from "./Marketing";
+import WorkflowGuide from "./WorkflowGuide";
 
 export const managementRoles = ["ADMIN", "MANAGER"];
 export const hrRoles = ["ADMIN", "HR"];
@@ -23,6 +24,7 @@ export const employeeName = employee => `${employee.firstName} ${employee.lastNa
 export function makePages(user, focusedTask = null) {
   return {
     Dashboard: { element: <Dashboard/> },
+    "How Website Works": { roles: managementRoles, element: <WorkflowGuide/> },
     Attendance: { element: <Attendance currentUser={user}/> },
     Marketing: { roles: ["ADMIN", "MANAGER", "MARKETING_MANAGER", "MARKETING_EXECUTIVE"], element: <Marketing currentUser={user}/> },
     "Submit Survey": { element: <SurveySubmissions/> },
