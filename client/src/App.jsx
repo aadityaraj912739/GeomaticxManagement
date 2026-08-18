@@ -27,7 +27,7 @@ function Login({ onLogin }) {
       onLogin(data.user);
     } catch (e) { setError(e.message); }
   };
-  return <main className="login"><form onSubmit={submit}><div className="brand-mark">G</div><h1>Geomaticx</h1><p>Management & field operations</p>{error && <p className="error">{error}</p>}{isRegister && <label>Name<input type="text" required minLength="2" value={name} onChange={e => setName(e.target.value)}/></label>}<label>Email<input type="email" required value={email} onChange={e => setEmail(e.target.value)}/></label><label>Password<input type="password" required minLength={isRegister ? 10 : 8} value={password} onChange={e => setPassword(e.target.value)}/></label><button>{isRegister ? "Create account" : "Sign in"}</button><button type="button" className="secondary auth-switch" onClick={() => resetMode(isRegister ? "login" : "register")}>{isRegister ? "Back to sign in" : "Create a new account"}</button></form></main>;
+  return <main className="login"><form onSubmit={submit}><img className="brand-mark" src="/geomaticx-logo.png" alt="Geomaticx logo"/><h1>Geomaticx</h1><p>Management & field operations</p>{error && <p className="error">{error}</p>}{isRegister && <label>Name<input type="text" required minLength="2" value={name} onChange={e => setName(e.target.value)}/></label>}<label>Email<input type="email" required value={email} onChange={e => setEmail(e.target.value)}/></label><label>Password<input type="password" required minLength={isRegister ? 10 : 8} value={password} onChange={e => setPassword(e.target.value)}/></label><button>{isRegister ? "Create account" : "Sign in"}</button><button type="button" className="secondary auth-switch" onClick={() => resetMode(isRegister ? "login" : "register")}>{isRegister ? "Back to sign in" : "Create a new account"}</button></form></main>;
 }
 
 export default function App() {
@@ -41,7 +41,7 @@ export default function App() {
   const active = visiblePages.some(([name]) => name === page) ? page : "Dashboard";
   return <div className="shell">
     <aside>
-      <div className="logo"><b>G</b><div><strong>Geomaticx</strong><small>Operations</small></div></div>
+      <div className="logo"><img className="logo-img" src="/geomaticx-logo.png" alt="Geomaticx logo"/><div><strong>Geomaticx</strong><small>Operations</small></div></div>
       <nav>{visiblePages.map(([name]) => <button className={active === name ? "active" : ""} key={name} onClick={() => setPage(name)}>{name}</button>)}</nav>
       <div className="account"><div className="account-row"><div><span>{user.name}</span><small>{user.role}</small></div><NotificationCenter onOpenTask={taskId => { setFocusedTask({ id: taskId, key: Date.now() }); setPage("Tasks"); }}/></div><button onClick={() => { localStorage.clear(); setUser(null); }}>Sign out</button></div>
     </aside>
