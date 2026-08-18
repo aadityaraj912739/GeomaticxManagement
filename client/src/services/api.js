@@ -7,6 +7,11 @@ export async function api(path, options = {}) {
   });
   if (res.status === 204) return null;
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && token && path !== "/auth/login" && path !== "/auth/register") {
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
+    window.location.reload();
+  }
   if (!res.ok) throw new Error(data.message || "Request failed");
   return data;
 }

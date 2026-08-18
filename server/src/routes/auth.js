@@ -8,7 +8,7 @@ import { authenticate } from "../middleware/auth.js";
 const router = Router();
 
 const authResponse = user => ({
-  token: jwt.sign({ sub: user.id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "8h" }),
+  token: jwt.sign({ sub: user.id, role: user.role }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || "30d" }),
   user: { id: user.id, name: user.name, email: user.email, role: user.role }
 });
 

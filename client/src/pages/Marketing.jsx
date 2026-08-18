@@ -55,42 +55,6 @@ const METRICS = (summary) => [
   { label: "Overdue follow-ups", value: summary.overdueFollowUps ?? 0, icon: "🔔", tone: "#e67e22" }
 ];
 
-// Role hierarchy — who does what & who reports to whom
-const ROLES = [
-  {
-    name: "Admin (GeoMark)",
-    icon: "🏛️",
-    color: "#7c5ce7",
-    reportsTo: null,
-    duties: ["Final Go / No-Go approval", "Approves bid preparation", "Converts awarded bid into a project"]
-  },
-  {
-    name: "Marketing Manager / Manager",
-    icon: "🗂️",
-    color: "#0d9e7c",
-    reportsTo: "Admin",
-    duties: ["Reviews screening → recommend GO / NO-BID", "Prepares BOQ & costing", "Records bid submission & post-bid result"]
-  },
-  {
-    name: "Marketing Executive",
-    icon: "👤",
-    color: "#166fe5",
-    reportsTo: "Marketing Manager",
-    duties: ["Registers tenders / enquiries", "Initial screening & bid recommendation", "Client follow-up + CRM activities"]
-  }
-];
-
-// Detailed end-to-end process — who acts at every step
-const DETAILED_STEPS = [
-  { n: 1, icon: "📥", title: "Intake / Create", statuses: ["NEW"], who: "Marketing Executive", action: "Tender / enquiry registered with client, scope, estimated value & deadline.", note: "Start of pipeline" },
-  { n: 2, icon: "🔍", title: "Executive Screening", statuses: ["SCREENING"], who: "Marketing Executive", action: "Suitability check → recommend BID, NO-BID, MORE INFO or HOLD.", note: "Sends to Manager" },
-  { n: 3, icon: "🗂️", title: "Manager Review", statuses: ["MANAGER_REVIEW"], who: "Marketing Manager", action: "Validates screening → RECOMMEND_GO, NO-BID, RETURN or HOLD.", note: "Sends to Admin" },
-  { n: 4, icon: "🏛️", title: "Admin Go / No-Go", statuses: ["ADMIN_REVIEW"], who: "Admin", action: "Final decision → GO_FOR_BID, NO_BID, APPROVE_WITH_CONDITIONS or HOLD.", note: "Gate before bidding" },
-  { n: 5, icon: "📝", title: "Bid Preparation & Costing", statuses: ["BID_APPROVED", "BID_PREPARATION"], who: "Marketing Manager", action: "BOQ / costing — manpower, equipment, EMD/BG, overhead, profit & tax.", note: "Build the bid" },
-  { n: 6, icon: "📤", title: "Bid Submission", statuses: ["SUBMITTED"], who: "Marketing Manager", action: "Portal, bid reference & final quoted value recorded — bid locks.", note: "Bid locked" },
-  { n: 7, icon: "🔎", title: "Post-Bid Evaluation", statuses: ["TECHNICAL_EVALUATION", "QUALIFIED", "FINANCIAL_EVALUATION", "NEGOTIATION"], who: "Marketing Manager", action: "Track technical pass → qualified → financial evaluation → negotiation.", note: "Outcome pending" },
-  { n: 8, icon: "🏆", title: "Award & Outcome", statuses: ["AWARDED", "LOST", "NO_BID"], who: "Admin", action: "AWARDED bid converts into a project; LOST / NO-BID closes the loop.", note: "End of pipeline" }
-];
 
 export default function Marketing({ currentUser }) {
   const [summary, setSummary] = useState({}); const [rows, setRows] = useState([]); const [team, setTeam] = useState([]);
@@ -151,76 +115,6 @@ export default function Marketing({ currentUser }) {
       ))}
     </div>
 
-    {/* Workflow — detailed marketing model */}
-    <div className="mk-workflow">
-      <div className="mk-workflow-head">
-        <span>🔄 Marketing model — roles, workflow & reporting</span>
-        <span className="mk-chart-badge">end-to-end lifecycle</span>
-      </div>
-
-      {/* Role hierarchy & reporting */}
-      <div className="mk-role-section">
-        <h4 className="mk-section-title">👥 Roles · responsibilities · reporting line</h4>
-        <div className="mk-org">
-          <div className="mk-org-col">
-            {ROLES.map(role => (
-              <div className="mk-role" key={role.name} style={{ borderTopColor: role.color }}>
-                <div className="mk-role-top">
-                  <span className="mk-role-icon" style={{ background: `${role.color}1a`, color: role.color }}>{role.icon}</span>
-                  <div className="mk-flow-text">
-                    <b style={{ color: role.color }}>{role.name}</b>
-                    <small className="mk-role-report">↳ Reports to: {role.reportsTo || <b>— (top authority)</b>}</small>
-                  </div>
-                </div>
-                <ul className="mk-role-duties">
-                  {role.duties.map(d => <li key={d}>{d}</li>)}
-                </ul>
-              </div>
-            ))}
-          </div>
-          <div className="mk-org-chain">
-            <span className="mk-chain-box" style={{ borderColor: ROLES[0].color, color: ROLES[0].color }}>🏛️ ADMIN <small>final authority</small></span>
-            <span className="mk-chain-link">⬇ reports to</span>
-            <span className="mk-chain-box" style={{ borderColor: ROLES[1].color, color: ROLES[1].color }}>🗂️ MANAGERS <small>review + bid</small></span>
-            <span className="mk-chain-link">⬇ reports to</span>
-            <span className="mk-chain-box" style={{ borderColor: ROLES[2].color, color: ROLES[2].color }}>👤 EXECUTIVES <small>intake + screening</small></span>
-          </div>
-        </div>
-      </div>
-
-      {/* Detailed process timeline */}
-      <div className="mk-step-section">
-        <h4 className="mk-section-title">🪜 Detailed process — every step, who acts & live count</h4>
-        <div className="mk-timeline">
-          {DETAILED_STEPS.map(step => {
-            const count = step.statuses.reduce((s, st) => s + (stageBuckets.find(b => b.name === label(st))?.count || 0), 0);
-            return (
-              <div className="mk-step" key={step.title}>
-                <span className="mk-step-num" style={{ background: tone(step.statuses[0])[1], color: "#fff" }}>{step.n}</span>
-                <div className="mk-step-body">
-                  <div className="mk-step-head">
-                    <span className="mk-flow-icon" style={{ background: tone(step.statuses[0])[0], color: tone(step.statuses[0])[1] }}>{step.icon}</span>
-                    <div className="mk-flow-text">
-                      <b>{step.title}</b>
-                      <small>{step.statuses.map(label).join(" · ")}</small>
-                    </div>
-                    {count > 0 && <span className="mk-flow-count" style={{ background: tone(step.statuses[0])[0], color: tone(step.statuses[0])[1] }}>{count}</span>}
-                    <span className="mk-step-arrow">↓</span>
-                  </div>
-                  <div className="mk-step-meta">
-                    <span className="mk-who" style={{ borderColor: step.n <= 2 ? "#166fe5" : step.n === 8 ? "#7c5ce7" : "#0d9e7c" }}>👤 {step.who} acts here</span>
-                    <span className="mk-action">{step.action}</span>
-                    <span className="mk-decision" style={{ color: tone(step.statuses[0])[1] }}>{step.note}</span>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      <p className="mk-flow-note">Any opportunity can branch to <b style={{ color: tone("HOLD")[1] }}>⏸️ HOLD</b> (paused) from any review stage, or become <b style={{ color: tone("LOST")[1] }}>🚫 LOST / NO-BID</b> after evaluation. Only an <b style={{ color: tone("AWARDED")[1] }}>🏆 AWARDED</b> bid is converted by the Admin into a project.</p>
-    </div>
 
     <details className="marketing-panel"><summary>Add opportunity / tender</summary><form className="form-grid" onSubmit={async e => { e.preventDefault(); await run("/marketing/opportunities", { method: "POST", body: JSON.stringify(form) }, "Opportunity registered"); setForm(initial); }}>
       <label>Work title<input required value={form.title} onChange={e => field("title", e.target.value)}/></label><label>Client<input required value={form.clientName} onChange={e => field("clientName", e.target.value)}/></label>
